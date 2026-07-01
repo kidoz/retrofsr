@@ -262,8 +262,10 @@ enum class Status : std::uint8_t {
 
 /// Upscale src into dst. Source and destination memory must not overlap.
 ///
-/// The function allocates a temporary floating-point image of dst.width * dst.height pixels.
-/// It may throw std::bad_alloc if allocation fails. All argument errors are returned as Status.
+/// When sharpening is enabled the function allocates a temporary floating-point image of
+/// dst.width * dst.height pixels; with sharpening disabled it samples directly into dst
+/// and only allocates a small per-column coordinate table. It may throw std::bad_alloc if
+/// allocation fails. All argument errors are returned as Status.
 [[nodiscard]] Status upscale(ImageView src, MutableImageView dst, Options options = {});
 
 } // namespace retrofsr

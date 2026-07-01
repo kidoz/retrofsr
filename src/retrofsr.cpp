@@ -559,21 +559,22 @@ void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace colo
             std::clamp(out.a, lo.a, hi.a)};
 }
 
-[[nodiscard]] Color4 sample_filter(ImageView image, std::uint32_t dx, std::uint32_t dy, std::uint32_t dst_w,
-                                   std::uint32_t dst_h, const Options& options) noexcept {
-    const float scale_x = static_cast<float>(image.width) / static_cast<float>(dst_w);
-    const float scale_y = static_cast<float>(image.height) / static_cast<float>(dst_h);
-    const float sx = (static_cast<float>(dx) + 0.5f) * scale_x - 0.5f;
-    const float sy = (static_cast<float>(dy) + 0.5f) * scale_y - 0.5f;
+/// Per-upscale constants hoisted out of the per-pixel loops.
+struct SampleParams {
+    /// dst/src upscale factors, used by sharp_bilinear's fraction narrowing.
+    float fraction_scale_x = 1.0f;
+    float fraction_scale_y = 1.0f;
+};
 
+[[nodiscard]] Color4 sample_filter(ImageView image, float sx, float sy, SampleParams params,
+                                   const Options& options) noexcept {
     switch (options.filter) {
     case Filter::nearest:
         return sample_nearest(image, sx, sy, options);
     case Filter::bilinear:
         return sample_bilinear(image, sx, sy, options);
     case Filter::sharp_bilinear:
-        return sample_bilinear(image, sx, sy, options, static_cast<float>(dst_w) / static_cast<float>(image.width),
-                               static_cast<float>(dst_h) / static_cast<float>(image.height));
+        return sample_bilinear(image, sx, sy, options, params.fraction_scale_x, params.fraction_scale_y);
     case Filter::catmull_rom:
         return sample_catmull_rom(image, sx, sy, options);
     case Filter::lanczos3:
@@ -627,59 +628,60 @@ void apply_sharpen(std::vector<Color4>& image, std::uint32_t width, std::uint32_
     const std::uint32_t thread_count = options.thread_count;
     const bool alpha_aware = alpha_aware_sharpen(options);
 
-    const std::vector<Color4> src = image;
-    const auto at = [&](std::int32_t x, std::int32_t y) noexcept -> Color4 {
-        x = std::clamp<std::int32_t>(x, 0, static_cast<std::int32_t>(width) - 1);
-        y = std::clamp<std::int32_t>(y, 0, static_cast<std::int32_t>(height) - 1);
-        return src[static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x)];
+    const float base_amount = sharpening * 0.85f;
+    const auto sharpen_one = [base_amount, alpha_aware](Color4 c, Color4 n, Color4 s, Color4 w,
+                                                        Color4 e) noexcept -> Color4 {
+        const float l0 = luma(c);
+        const float lmin = std::min({l0, luma(n), luma(s), luma(w), luma(e)});
+        const float lmax = std::max({l0, luma(n), luma(s), luma(w), luma(e)});
+        const float range = lmax - lmin;
+        const float adaptive = range / (range + 0.10f);
+        float amount = base_amount * adaptive;
+        if (alpha_aware) {
+            amount *= clamp01(c.a);
+        }
+
+        const Color4 blur = (n + s + w + e) * 0.25f;
+        Color4 out = c + (c - blur) * amount;
+
+        const float margin = 0.06f + range * 0.08f;
+        const float min_r = std::min({c.r, n.r, s.r, w.r, e.r}) - margin;
+        const float max_r = std::max({c.r, n.r, s.r, w.r, e.r}) + margin;
+        const float min_g = std::min({c.g, n.g, s.g, w.g, e.g}) - margin;
+        const float max_g = std::max({c.g, n.g, s.g, w.g, e.g}) + margin;
+        const float min_b = std::min({c.b, n.b, s.b, w.b, e.b}) - margin;
+        const float max_b = std::max({c.b, n.b, s.b, w.b, e.b}) + margin;
+
+        out.r = std::clamp(out.r, min_r, max_r);
+        out.g = std::clamp(out.g, min_g, max_g);
+        out.b = std::clamp(out.b, min_b, max_b);
+        out.a = c.a;
+
+        if (alpha_aware) {
+            const float cap = clamp01(c.a);
+            out.r = std::min(out.r, cap);
+            out.g = std::min(out.g, cap);
+            out.b = std::min(out.b, cap);
+        }
+        return clamp_color(out);
     };
 
-    const float base_amount = sharpening * 0.85f;
-
+    const std::vector<Color4> src = image;
     parallel_rows(height, thread_count, [&](std::uint32_t y0, std::uint32_t y1) {
         for (std::uint32_t y = y0; y < y1; ++y) {
-            for (std::uint32_t x = 0; x < width; ++x) {
-                const auto sx = static_cast<std::int32_t>(x);
-                const auto sy = static_cast<std::int32_t>(y);
-                const Color4 c = at(sx, sy);
-                const Color4 n = at(sx, sy - 1);
-                const Color4 s = at(sx, sy + 1);
-                const Color4 w = at(sx - 1, sy);
-                const Color4 e = at(sx + 1, sy);
+            Color4* out_row = image.data() + static_cast<std::size_t>(y) * width;
+            const Color4* mid = src.data() + static_cast<std::size_t>(y) * width;
+            const Color4* up = src.data() + static_cast<std::size_t>(y == 0 ? y : y - 1) * width;
+            const Color4* down = src.data() + static_cast<std::size_t>(y + 1 >= height ? y : y + 1) * width;
 
-                const float l0 = luma(c);
-                const float lmin = std::min({l0, luma(n), luma(s), luma(w), luma(e)});
-                const float lmax = std::max({l0, luma(n), luma(s), luma(w), luma(e)});
-                const float range = lmax - lmin;
-                const float adaptive = range / (range + 0.10f);
-                float amount = base_amount * adaptive;
-                if (alpha_aware) {
-                    amount *= clamp01(c.a);
-                }
-
-                const Color4 blur = (n + s + w + e) * 0.25f;
-                Color4 out = c + (c - blur) * amount;
-
-                const float margin = 0.06f + range * 0.08f;
-                const float min_r = std::min({c.r, n.r, s.r, w.r, e.r}) - margin;
-                const float max_r = std::max({c.r, n.r, s.r, w.r, e.r}) + margin;
-                const float min_g = std::min({c.g, n.g, s.g, w.g, e.g}) - margin;
-                const float max_g = std::max({c.g, n.g, s.g, w.g, e.g}) + margin;
-                const float min_b = std::min({c.b, n.b, s.b, w.b, e.b}) - margin;
-                const float max_b = std::max({c.b, n.b, s.b, w.b, e.b}) + margin;
-
-                out.r = std::clamp(out.r, min_r, max_r);
-                out.g = std::clamp(out.g, min_g, max_g);
-                out.b = std::clamp(out.b, min_b, max_b);
-                out.a = c.a;
-
-                if (alpha_aware) {
-                    const float cap = clamp01(c.a);
-                    out.r = std::min(out.r, cap);
-                    out.g = std::min(out.g, cap);
-                    out.b = std::min(out.b, cap);
-                }
-                image[static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x)] = clamp_color(out);
+            // Border columns clamp the horizontal neighbors to the edge texel.
+            out_row[0] = sharpen_one(mid[0], up[0], down[0], mid[0], mid[width > 1 ? 1 : 0]);
+            if (width > 1) {
+                out_row[width - 1] =
+                    sharpen_one(mid[width - 1], up[width - 1], down[width - 1], mid[width - 2], mid[width - 1]);
+            }
+            for (std::uint32_t x = 1; x + 1 < width; ++x) {
+                out_row[x] = sharpen_one(mid[x], up[x], down[x], mid[x - 1], mid[x + 1]);
             }
         }
     });
@@ -693,55 +695,57 @@ void apply_rcas(std::vector<Color4>& image, std::uint32_t width, std::uint32_t h
     const std::uint32_t thread_count = options.thread_count;
     const bool alpha_aware = alpha_aware_sharpen(options);
 
-    const std::vector<Color4> src = image;
-    const auto at = [&](std::int32_t x, std::int32_t y) noexcept -> Color4 {
-        x = std::clamp<std::int32_t>(x, 0, static_cast<std::int32_t>(width) - 1);
-        y = std::clamp<std::int32_t>(y, 0, static_cast<std::int32_t>(height) - 1);
-        return src[static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x)];
-    };
-
     // Largest negative lobe that keeps the sharpened result inside the local value range.
     constexpr float lobe_limit = 0.25f - 1.0f / 16.0f;
 
+    const auto rcas_one = [sharpening, alpha_aware](Color4 c, Color4 n, Color4 s, Color4 w,
+                                                    Color4 e) noexcept -> Color4 {
+        // Per-channel peak-limited lobe: never push the center past the point where the
+        // result would leave [0, 1] given the local cross minimum/maximum.
+        const auto channel_lobe = [](float cn, float cs, float cw, float ce) noexcept {
+            constexpr float eps = 1.0e-4f;
+            const float mn = std::min(std::min(cn, cs), std::min(cw, ce));
+            const float mx = std::max(std::max(cn, cs), std::max(cw, ce));
+            const float hit_min = mn / (4.0f * mx + eps);
+            const float hit_max = (1.0f - mx) / (4.0f * mn - 4.0f - eps);
+            return std::max(-hit_min, hit_max);
+        };
+        const float lobe_r = channel_lobe(n.r, s.r, w.r, e.r);
+        const float lobe_g = channel_lobe(n.g, s.g, w.g, e.g);
+        const float lobe_b = channel_lobe(n.b, s.b, w.b, e.b);
+        float lobe = std::max(-lobe_limit, std::min(std::max({lobe_r, lobe_g, lobe_b}), 0.0f)) * sharpening;
+        if (alpha_aware) {
+            lobe *= clamp01(c.a);
+        }
+
+        const float rcp = 1.0f / (4.0f * lobe + 1.0f);
+        Color4 out = ((n + s + w + e) * lobe + c) * rcp;
+        out.a = c.a;
+        if (alpha_aware) {
+            const float cap = clamp01(c.a);
+            out.r = std::min(out.r, cap);
+            out.g = std::min(out.g, cap);
+            out.b = std::min(out.b, cap);
+        }
+        return clamp_color(out);
+    };
+
+    const std::vector<Color4> src = image;
     parallel_rows(height, thread_count, [&](std::uint32_t y0, std::uint32_t y1) {
         for (std::uint32_t y = y0; y < y1; ++y) {
-            for (std::uint32_t x = 0; x < width; ++x) {
-                const auto sx = static_cast<std::int32_t>(x);
-                const auto sy = static_cast<std::int32_t>(y);
-                const Color4 c = at(sx, sy);
-                const Color4 n = at(sx, sy - 1);
-                const Color4 s = at(sx, sy + 1);
-                const Color4 w = at(sx - 1, sy);
-                const Color4 e = at(sx + 1, sy);
+            Color4* out_row = image.data() + static_cast<std::size_t>(y) * width;
+            const Color4* mid = src.data() + static_cast<std::size_t>(y) * width;
+            const Color4* up = src.data() + static_cast<std::size_t>(y == 0 ? y : y - 1) * width;
+            const Color4* down = src.data() + static_cast<std::size_t>(y + 1 >= height ? y : y + 1) * width;
 
-                // Per-channel peak-limited lobe: never push the center past the point where the
-                // result would leave [0, 1] given the local cross minimum/maximum.
-                const auto channel_lobe = [](float cn, float cs, float cw, float ce) noexcept {
-                    constexpr float eps = 1.0e-4f;
-                    const float mn = std::min(std::min(cn, cs), std::min(cw, ce));
-                    const float mx = std::max(std::max(cn, cs), std::max(cw, ce));
-                    const float hit_min = mn / (4.0f * mx + eps);
-                    const float hit_max = (1.0f - mx) / (4.0f * mn - 4.0f - eps);
-                    return std::max(-hit_min, hit_max);
-                };
-                const float lobe_r = channel_lobe(n.r, s.r, w.r, e.r);
-                const float lobe_g = channel_lobe(n.g, s.g, w.g, e.g);
-                const float lobe_b = channel_lobe(n.b, s.b, w.b, e.b);
-                float lobe = std::max(-lobe_limit, std::min(std::max({lobe_r, lobe_g, lobe_b}), 0.0f)) * sharpening;
-                if (alpha_aware) {
-                    lobe *= clamp01(c.a);
-                }
-
-                const float rcp = 1.0f / (4.0f * lobe + 1.0f);
-                Color4 out = ((n + s + w + e) * lobe + c) * rcp;
-                out.a = c.a;
-                if (alpha_aware) {
-                    const float cap = clamp01(c.a);
-                    out.r = std::min(out.r, cap);
-                    out.g = std::min(out.g, cap);
-                    out.b = std::min(out.b, cap);
-                }
-                image[static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x)] = clamp_color(out);
+            // Border columns clamp the horizontal neighbors to the edge texel.
+            out_row[0] = rcas_one(mid[0], up[0], down[0], mid[0], mid[width > 1 ? 1 : 0]);
+            if (width > 1) {
+                out_row[width - 1] =
+                    rcas_one(mid[width - 1], up[width - 1], down[width - 1], mid[width - 2], mid[width - 1]);
+            }
+            for (std::uint32_t x = 1; x + 1 < width; ++x) {
+                out_row[x] = rcas_one(mid[x], up[x], down[x], mid[x - 1], mid[x + 1]);
             }
         }
     });
@@ -859,13 +863,51 @@ Status upscale(ImageView src, MutableImageView dst, Options options) {
     options.sharpening = std::clamp(options.sharpening, 0.0f, 1.0f);
     options.edge_strength = std::max(0.0f, options.edge_strength);
 
+    const float scale_x = static_cast<float>(src.width) / static_cast<float>(dst.width);
+    const float scale_y = static_cast<float>(src.height) / static_cast<float>(dst.height);
+    const SampleParams params{
+        static_cast<float>(dst.width) / static_cast<float>(src.width),
+        static_cast<float>(dst.height) / static_cast<float>(src.height),
+    };
+
+    // Hoisted per-column source coordinates; same expression the per-pixel path used.
+    std::vector<float> sx_table(dst.width);
+    for (std::uint32_t x = 0; x < dst.width; ++x) {
+        sx_table[x] = (static_cast<float>(x) + 0.5f) * scale_x - 0.5f;
+    }
+
+    const bool force_opaque = options.alpha == AlphaMode::ignore || !has_alpha(dst.format);
+    const std::size_t dst_bpp = bytes_per_pixel(dst.format);
+    const auto store_row = [&](std::uint32_t y, auto&& pixel_at) {
+        auto* row = row_ptr(dst, static_cast<std::int32_t>(y));
+        for (std::uint32_t x = 0; x < dst.width; ++x) {
+            const Color4 c = prepare_for_store(pixel_at(x), options, dst.format);
+            const float dither = options.dither == Dither::ordered ? bayer4(x, y) : 0.5f;
+            store_raw_pixel(row + static_cast<std::ptrdiff_t>(x * dst_bpp), dst.format, c, options.color_space,
+                            force_opaque, dither);
+        }
+    };
+
+    if (options.sharpening <= 0.0f) {
+        // No second pass needed: sample straight into the destination and skip the
+        // intermediate float image entirely.
+        parallel_rows(dst.height, options.thread_count, [&](std::uint32_t y0, std::uint32_t y1) {
+            for (std::uint32_t y = y0; y < y1; ++y) {
+                const float sy = (static_cast<float>(y) + 0.5f) * scale_y - 0.5f;
+                store_row(y, [&](std::uint32_t x) { return sample_filter(src, sx_table[x], sy, params, options); });
+            }
+        });
+        return Status::ok;
+    }
+
     std::vector<Color4> work(static_cast<std::size_t>(dst.width) * static_cast<std::size_t>(dst.height));
 
     parallel_rows(dst.height, options.thread_count, [&](std::uint32_t y0, std::uint32_t y1) {
         for (std::uint32_t y = y0; y < y1; ++y) {
+            const float sy = (static_cast<float>(y) + 0.5f) * scale_y - 0.5f;
+            Color4* row = work.data() + static_cast<std::size_t>(y) * dst.width;
             for (std::uint32_t x = 0; x < dst.width; ++x) {
-                work[static_cast<std::size_t>(y) * dst.width + static_cast<std::size_t>(x)] =
-                    sample_filter(src, x, y, dst.width, dst.height, options);
+                row[x] = sample_filter(src, sx_table[x], sy, params, options);
             }
         }
     });
@@ -877,17 +919,9 @@ Status upscale(ImageView src, MutableImageView dst, Options options) {
     }
 
     parallel_rows(dst.height, options.thread_count, [&](std::uint32_t y0, std::uint32_t y1) {
-        const bool force_opaque = options.alpha == AlphaMode::ignore || !has_alpha(dst.format);
-        const std::size_t dst_bpp = bytes_per_pixel(dst.format);
         for (std::uint32_t y = y0; y < y1; ++y) {
-            auto* row = row_ptr(dst, static_cast<std::int32_t>(y));
-            for (std::uint32_t x = 0; x < dst.width; ++x) {
-                const Color4 c =
-                    prepare_for_store(work[static_cast<std::size_t>(y) * dst.width + x], options, dst.format);
-                const float dither = options.dither == Dither::ordered ? bayer4(x, y) : 0.5f;
-                store_raw_pixel(row + static_cast<std::ptrdiff_t>(x * dst_bpp), dst.format, c, options.color_space,
-                                force_opaque, dither);
-            }
+            const Color4* row = work.data() + static_cast<std::size_t>(y) * dst.width;
+            store_row(y, [&](std::uint32_t x) { return row[x]; });
         }
     });
 
