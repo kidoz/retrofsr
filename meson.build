@@ -51,7 +51,7 @@ if get_option('tests')
   )
   test_exe = executable(
     'retrofsr_basic_test',
-    ['tests/basic.cpp', 'tests/golden.cpp'],
+    ['tests/basic.cpp', 'tests/golden.cpp', 'tests/image_quality.cpp'],
     dependencies: [retrofsr_dep, catch2_dep],
     install: false,
   )
