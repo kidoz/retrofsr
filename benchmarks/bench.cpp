@@ -59,8 +59,7 @@ std::vector<std::byte> make_frame(std::uint32_t width, std::uint32_t height) {
 [[nodiscard]] double run_once(const std::vector<std::byte>& src, FrameSize s, std::vector<std::byte>& dst,
                               retrofsr::Options options) {
     const retrofsr::ImageView src_view{src.data(), s.width, s.height, 0, retrofsr::PixelFormat::rgba8};
-    const retrofsr::MutableImageView dst_view{dst.data(), s.width * 2, s.height * 2, 0,
-                                              retrofsr::PixelFormat::rgba8};
+    const retrofsr::MutableImageView dst_view{dst.data(), s.width * 2, s.height * 2, 0, retrofsr::PixelFormat::rgba8};
     const auto start = std::chrono::steady_clock::now();
     const auto status = retrofsr::upscale(src_view, dst_view, options);
     const auto stop = std::chrono::steady_clock::now();
@@ -121,8 +120,7 @@ int main(int argc, char** argv) {
             const double avg_ms = total_ms / iterations;
 
             char size_text[32];
-            std::snprintf(size_text, sizeof size_text, "%ux%u -> %ux%u", s.width, s.height, s.width * 2,
-                          s.height * 2);
+            std::snprintf(size_text, sizeof size_text, "%ux%u -> %ux%u", s.width, s.height, s.width * 2, s.height * 2);
             std::printf("%-15s %-22s %12.3f %12.3f %12.1f\n", filter_case.name, size_text, avg_ms, min_ms,
                         dst_mpix / (avg_ms / 1000.0));
         }
