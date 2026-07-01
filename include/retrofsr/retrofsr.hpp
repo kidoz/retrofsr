@@ -34,6 +34,9 @@ enum class Filter : std::uint8_t {
     lanczos3,
     /// FSR-1-inspired spatial upsampling: Lanczos-like filter with reduced radius near strong edges.
     edge_adaptive_lanczos,
+    /// FSR-1-inspired EASU-like upsampling: adaptive edge direction, anisotropic Lanczos2-style
+    /// weighting, and a local min/max anti-ringing clamp. Best quality for filtered/3D frames.
+    easu,
 };
 
 /// How RGB values should be interpreted during interpolation.
@@ -42,6 +45,19 @@ enum class ColorSpace : std::uint8_t {
     srgb,
     /// Treat channels as linear normalized values. Faster, useful for non-color data.
     linear,
+    /// Filter gamma-encoded values directly, without linearization. This matches how FSR 1
+    /// operates on perceptual/post-tonemap color and preserves apparent contrast; use it with
+    /// Filter::easu for FSR-style output. Same cost as linear.
+    perceptual,
+};
+
+/// Post-upscale sharpening algorithm. Options::sharpening controls the strength for both.
+enum class Sharpen : std::uint8_t {
+    /// Unsharp mask with local contrast adaptation and per-channel overshoot clamping.
+    contrast_adaptive,
+    /// RCAS-like robust contrast-adaptive sharpening (FSR-1-inspired): a peak-limited negative
+    /// lobe that resists ringing and avoids amplifying already-saturated detail.
+    robust_contrast_adaptive,
 };
 
 /// Alpha handling for filtering.
@@ -83,7 +99,11 @@ struct Options {
     /// 0 disables sharpening. Good FSR-like values are about 0.10 to 0.35.
     float sharpening = 0.20f;
 
-    /// Edge sensitivity for edge_adaptive_lanczos. Higher values reduce ringing more aggressively.
+    /// Sharpening algorithm applied when sharpening > 0.
+    Sharpen sharpen = Sharpen::contrast_adaptive;
+
+    /// Edge sensitivity for edge_adaptive_lanczos and easu. Higher values reduce ringing and
+    /// stair-stepping more aggressively.
     float edge_strength = 1.0f;
 
     /// 0 = choose automatically. 1 = single-threaded.
@@ -111,6 +131,98 @@ struct Options {
     options.sharpening = 0.20f;
     options.edge_strength = 1.0f;
     options.thread_count = 0;
+    return options;
+}
+
+/// Common FSR-style quality presets expressed as source-to-destination scale factors.
+enum class QualityPreset : std::uint8_t {
+    /// 1.5x per axis.
+    quality,
+    /// 1.7x per axis.
+    balanced,
+    /// 2.0x per axis.
+    performance,
+    /// 3.0x per axis.
+    ultra_performance,
+};
+
+/// Per-axis upscale factor for a quality preset.
+[[nodiscard]] constexpr float quality_preset_scale(QualityPreset preset) noexcept {
+    switch (preset) {
+    case QualityPreset::quality:
+        return 1.5f;
+    case QualityPreset::balanced:
+        return 1.7f;
+    case QualityPreset::performance:
+        return 2.0f;
+    case QualityPreset::ultra_performance:
+        return 3.0f;
+    }
+    return 1.5f;
+}
+
+/// A width/height pair, used for preset size helpers.
+struct Extent {
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
+/// Recommended source (render) size for the given output size under a preset.
+/// Rounds to the nearest pixel and never returns a zero dimension.
+[[nodiscard]] constexpr Extent quality_preset_source_size(QualityPreset preset, std::uint32_t output_width,
+                                                          std::uint32_t output_height) noexcept {
+    // Scale factors as exact integer ratios: 1.5 = 3/2, 1.7 = 17/10, 2.0 = 2/1, 3.0 = 3/1.
+    std::uint64_t num = 2;
+    std::uint64_t den = 3;
+    switch (preset) {
+    case QualityPreset::quality:
+        num = 2;
+        den = 3;
+        break;
+    case QualityPreset::balanced:
+        num = 10;
+        den = 17;
+        break;
+    case QualityPreset::performance:
+        num = 1;
+        den = 2;
+        break;
+    case QualityPreset::ultra_performance:
+        num = 1;
+        den = 3;
+        break;
+    }
+    const auto scaled_w = (static_cast<std::uint64_t>(output_width) * num + den / 2) / den;
+    const auto scaled_h = (static_cast<std::uint64_t>(output_height) * num + den / 2) / den;
+    return {static_cast<std::uint32_t>(scaled_w == 0 && output_width != 0 ? 1 : scaled_w),
+            static_cast<std::uint32_t>(scaled_h == 0 && output_height != 0 ? 1 : scaled_h)};
+}
+
+/// FSR-1-style spatial preset: EASU-like filtering plus RCAS-like sharpening on
+/// gamma-encoded (perceptual) color. This is not official AMD FSR; it follows the
+/// same high-level recipe with a portable CPU implementation.
+[[nodiscard]] constexpr Options fsr1_style_options(QualityPreset preset = QualityPreset::quality) noexcept {
+    Options options{};
+    options.filter = Filter::easu;
+    options.color_space = ColorSpace::perceptual;
+    options.alpha = AlphaMode::ignore;
+    options.sharpen = Sharpen::robust_contrast_adaptive;
+    options.edge_strength = 1.0f;
+    options.thread_count = 0;
+    switch (preset) {
+    case QualityPreset::quality:
+        options.sharpening = 0.20f;
+        break;
+    case QualityPreset::balanced:
+        options.sharpening = 0.25f;
+        break;
+    case QualityPreset::performance:
+        options.sharpening = 0.30f;
+        break;
+    case QualityPreset::ultra_performance:
+        options.sharpening = 0.35f;
+        break;
+    }
     return options;
 }
 

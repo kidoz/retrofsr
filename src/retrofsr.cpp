@@ -450,6 +450,98 @@ void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace colo
     return sample_lanczos(image, sx, sy, options, radius_x, radius_y);
 }
 
+[[nodiscard]] constexpr float easu_kernel(float d2) noexcept {
+    // Lanczos2-like polynomial window evaluated on squared distance: unit at 0, zero
+    // crossings at distance 1 and 2, one negative lobe in between.
+    if (d2 >= 4.0f) {
+        return 0.0f;
+    }
+    const float base = 0.4f * d2 - 1.0f;
+    const float window = 0.25f * d2 - 1.0f;
+    return ((25.0f / 16.0f) * base * base - (25.0f / 16.0f - 1.0f)) * window * window;
+}
+
+[[nodiscard]] Color4 sample_easu(ImageView image, float sx, float sy, const Options& options) noexcept {
+    const auto base_x = static_cast<std::int32_t>(std::floor(sx));
+    const auto base_y = static_cast<std::int32_t>(std::floor(sy));
+    const float fx = sx - static_cast<float>(base_x);
+    const float fy = sy - static_cast<float>(base_y);
+
+    // 4x4 neighborhood; taps[j][i] is source texel (base_x - 1 + i, base_y - 1 + j).
+    std::array<std::array<Color4, 4>, 4> taps{};
+    std::array<std::array<float, 4>, 4> lum{};
+    for (std::int32_t j = 0; j < 4; ++j) {
+        for (std::int32_t i = 0; i < 4; ++i) {
+            taps[j][i] = load_source(image, base_x - 1 + i, base_y - 1 + j, options);
+            lum[j][i] = luma(taps[j][i]);
+        }
+    }
+
+    // Adaptive edge direction: bilinearly blended central-difference gradients at the 2x2
+    // quad nearest the sample point. The gradient points across the local edge.
+    float dir_x = 0.0f;
+    float dir_y = 0.0f;
+    const auto accumulate_gradient = [&](std::int32_t i, std::int32_t j, float w) noexcept {
+        dir_x += (lum[j][i + 1] - lum[j][i - 1]) * w;
+        dir_y += (lum[j + 1][i] - lum[j - 1][i]) * w;
+    };
+    accumulate_gradient(1, 1, (1.0f - fx) * (1.0f - fy));
+    accumulate_gradient(2, 1, fx * (1.0f - fy));
+    accumulate_gradient(1, 2, (1.0f - fx) * fy);
+    accumulate_gradient(2, 2, fx * fy);
+
+    // Strong coherent edges stretch the kernel along the edge and tighten it across,
+    // which smooths stair-stepping without blurring the edge itself.
+    float grad_x = 1.0f;
+    float grad_y = 0.0f;
+    float stretch = 0.0f;
+    const float dir_len2 = dir_x * dir_x + dir_y * dir_y;
+    if (dir_len2 > 1.0e-8f) {
+        const float dir_len = std::sqrt(dir_len2);
+        grad_x = dir_x / dir_len;
+        grad_y = dir_y / dir_len;
+        stretch = clamp01(dir_len * 2.0f) * clamp01(options.edge_strength);
+    }
+    const float across_scale = 1.0f + stretch;
+    const float along_scale = 1.0f / (1.0f + 0.5f * stretch);
+
+    Color4 sum{};
+    float weight_sum = 0.0f;
+    for (std::int32_t j = 0; j < 4; ++j) {
+        const float oy = static_cast<float>(base_y - 1 + j) - sy;
+        for (std::int32_t i = 0; i < 4; ++i) {
+            const float ox = static_cast<float>(base_x - 1 + i) - sx;
+            const float across = (ox * grad_x + oy * grad_y) * across_scale;
+            const float along = (oy * grad_x - ox * grad_y) * along_scale;
+            const float w = easu_kernel(across * across + along * along);
+            if (w == 0.0f) {
+                continue;
+            }
+            sum += taps[j][i] * w;
+            weight_sum += w;
+        }
+    }
+
+    Color4 out = taps[fy > 0.5f ? 2 : 1][fx > 0.5f ? 2 : 1];
+    if (std::abs(weight_sum) > 1.0e-7f) {
+        out = sum / weight_sum;
+    }
+
+    // Anti-ringing: clamp to the min/max of the nearest 2x2 source quad so the negative
+    // kernel lobes cannot overshoot around hard edges.
+    Color4 lo = taps[1][1];
+    Color4 hi = taps[1][1];
+    for (std::int32_t j = 1; j <= 2; ++j) {
+        for (std::int32_t i = 1; i <= 2; ++i) {
+            const Color4 t = taps[j][i];
+            lo = {std::min(lo.r, t.r), std::min(lo.g, t.g), std::min(lo.b, t.b), std::min(lo.a, t.a)};
+            hi = {std::max(hi.r, t.r), std::max(hi.g, t.g), std::max(hi.b, t.b), std::max(hi.a, t.a)};
+        }
+    }
+    return {std::clamp(out.r, lo.r, hi.r), std::clamp(out.g, lo.g, hi.g), std::clamp(out.b, lo.b, hi.b),
+            std::clamp(out.a, lo.a, hi.a)};
+}
+
 [[nodiscard]] Color4 sample_filter(ImageView image, std::uint32_t dx, std::uint32_t dy, std::uint32_t dst_w,
                                    std::uint32_t dst_h, const Options& options) noexcept {
     const float scale_x = static_cast<float>(image.width) / static_cast<float>(dst_w);
@@ -471,6 +563,8 @@ void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace colo
         return sample_lanczos(image, sx, sy, options, 3.0f, 3.0f);
     case Filter::edge_adaptive_lanczos:
         return sample_edge_adaptive_lanczos(image, sx, sy, options);
+    case Filter::easu:
+        return sample_easu(image, sx, sy, options);
     }
     return sample_edge_adaptive_lanczos(image, sx, sy, options);
 }
@@ -552,6 +646,59 @@ void apply_sharpen(std::vector<Color4>& image, std::uint32_t width, std::uint32_
                 out.b = std::clamp(out.b, min_b, max_b);
                 out.a = c.a;
 
+                image[static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x)] = clamp_color(out);
+            }
+        }
+    });
+}
+
+void apply_rcas(std::vector<Color4>& image, std::uint32_t width, std::uint32_t height, float sharpening,
+                std::uint32_t thread_count) {
+    sharpening = std::clamp(sharpening, 0.0f, 1.0f);
+    if (sharpening <= 0.0f || width == 0 || height == 0) {
+        return;
+    }
+
+    const std::vector<Color4> src = image;
+    const auto at = [&](std::int32_t x, std::int32_t y) noexcept -> Color4 {
+        x = std::clamp<std::int32_t>(x, 0, static_cast<std::int32_t>(width) - 1);
+        y = std::clamp<std::int32_t>(y, 0, static_cast<std::int32_t>(height) - 1);
+        return src[static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x)];
+    };
+
+    // Largest negative lobe that keeps the sharpened result inside the local value range.
+    constexpr float lobe_limit = 0.25f - 1.0f / 16.0f;
+
+    parallel_rows(height, thread_count, [&](std::uint32_t y0, std::uint32_t y1) {
+        for (std::uint32_t y = y0; y < y1; ++y) {
+            for (std::uint32_t x = 0; x < width; ++x) {
+                const auto sx = static_cast<std::int32_t>(x);
+                const auto sy = static_cast<std::int32_t>(y);
+                const Color4 c = at(sx, sy);
+                const Color4 n = at(sx, sy - 1);
+                const Color4 s = at(sx, sy + 1);
+                const Color4 w = at(sx - 1, sy);
+                const Color4 e = at(sx + 1, sy);
+
+                // Per-channel peak-limited lobe: never push the center past the point where the
+                // result would leave [0, 1] given the local cross minimum/maximum.
+                const auto channel_lobe = [](float cn, float cs, float cw, float ce) noexcept {
+                    constexpr float eps = 1.0e-4f;
+                    const float mn = std::min(std::min(cn, cs), std::min(cw, ce));
+                    const float mx = std::max(std::max(cn, cs), std::max(cw, ce));
+                    const float hit_min = mn / (4.0f * mx + eps);
+                    const float hit_max = (1.0f - mx) / (4.0f * mn - 4.0f - eps);
+                    return std::max(-hit_min, hit_max);
+                };
+                const float lobe_r = channel_lobe(n.r, s.r, w.r, e.r);
+                const float lobe_g = channel_lobe(n.g, s.g, w.g, e.g);
+                const float lobe_b = channel_lobe(n.b, s.b, w.b, e.b);
+                const float lobe =
+                    std::max(-lobe_limit, std::min(std::max({lobe_r, lobe_g, lobe_b}), 0.0f)) * sharpening;
+
+                const float rcp = 1.0f / (4.0f * lobe + 1.0f);
+                Color4 out = ((n + s + w + e) * lobe + c) * rcp;
+                out.a = c.a;
                 image[static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x)] = clamp_color(out);
             }
         }
@@ -681,7 +828,11 @@ Status upscale(ImageView src, MutableImageView dst, Options options) {
         }
     });
 
-    apply_sharpen(work, dst.width, dst.height, options.sharpening, options.thread_count);
+    if (options.sharpen == Sharpen::robust_contrast_adaptive) {
+        apply_rcas(work, dst.width, dst.height, options.sharpening, options.thread_count);
+    } else {
+        apply_sharpen(work, dst.width, dst.height, options.sharpening, options.thread_count);
+    }
 
     parallel_rows(dst.height, options.thread_count, [&](std::uint32_t y0, std::uint32_t y1) {
         const bool force_opaque = options.alpha == AlphaMode::ignore || !has_alpha(dst.format);
