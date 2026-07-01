@@ -12,10 +12,22 @@ project(
 
 retrofsr_inc = include_directories('include')
 
+# Portable SIMD evaluation outcome: clang/gcc auto-vectorize the Color4 kernels via SLP at
+# the default -O3 already, and forcing whole-loop vectorization is rejected by the cost
+# model. The simd option therefore enables vectorization-friendly math flags (no errno or
+# trap bookkeeping around libm calls) instead of hand-written intrinsic paths; the default
+# build is the scalar-fallback configuration of the exact same kernels.
+cpp_compiler = meson.get_compiler('cpp')
+retrofsr_args = []
+if get_option('simd')
+  retrofsr_args += cpp_compiler.get_supported_arguments('-fno-math-errno', '-fno-trapping-math')
+endif
+
 retrofsr_lib = library(
   'retrofsr',
   'src/retrofsr.cpp',
   include_directories: retrofsr_inc,
+  cpp_args: retrofsr_args,
   install: true,
 )
 
@@ -69,6 +81,15 @@ if get_option('tools')
   executable(
     'retrofsr_compare',
     'tools/retrofsr_compare.cpp',
+    install: false,
+  )
+endif
+
+if get_option('benchmarks')
+  executable(
+    'retrofsr_bench',
+    'benchmarks/bench.cpp',
+    dependencies: retrofsr_dep,
     install: false,
   )
 endif

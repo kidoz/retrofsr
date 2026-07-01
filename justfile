@@ -1,8 +1,8 @@
 set shell := ["sh", "-eu", "-c"]
 
 build_dir := env_var_or_default("BUILD_DIR", "buildDir")
-format_files := "include/retrofsr/retrofsr.hpp src/retrofsr.cpp tests/basic.cpp tests/golden.cpp tests/golden_support.hpp tests/gen_golden_data.cpp tests/fixtures.hpp tests/image_quality.cpp examples/scale_ppm.cpp tools/retrofsr_compare.cpp"
-tidy_files := "src/retrofsr.cpp tests/basic.cpp tests/golden.cpp tests/gen_golden_data.cpp tests/image_quality.cpp examples/scale_ppm.cpp tools/retrofsr_compare.cpp"
+format_files := "include/retrofsr/retrofsr.hpp src/retrofsr.cpp tests/basic.cpp tests/golden.cpp tests/golden_support.hpp tests/gen_golden_data.cpp tests/fixtures.hpp tests/image_quality.cpp examples/scale_ppm.cpp tools/retrofsr_compare.cpp benchmarks/bench.cpp"
+tidy_files := "src/retrofsr.cpp tests/basic.cpp tests/golden.cpp tests/gen_golden_data.cpp tests/image_quality.cpp examples/scale_ppm.cpp tools/retrofsr_compare.cpp benchmarks/bench.cpp"
 
 default:
     @just --list
@@ -31,6 +31,12 @@ quality: build
 # Compare two PPM images: prints MSE/PSNR/SSIM; pass --min-psnr/--min-ssim thresholds.
 compare a b *args: build
     ./"{{build_dir}}"/retrofsr_compare "{{a}}" "{{b}}" {{args}}
+
+# Build and run throughput/latency benchmarks for common emulator sizes.
+bench:
+    meson setup "{{build_dir}}" --reconfigure -Dbenchmarks=true > /dev/null
+    meson compile -C "{{build_dir}}" retrofsr_bench
+    ./"{{build_dir}}"/retrofsr_bench
 
 format:
     clang-format -i {{format_files}}
