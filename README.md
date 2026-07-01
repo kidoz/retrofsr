@@ -18,7 +18,9 @@ It provides three practical presets:
 - Sharpeners: contrast-adaptive unsharp mask, RCAS-like robust contrast-adaptive sharpening.
 - Color modes: sRGB (linearized), linear, and perceptual (gamma-encoded, FSR-1 style).
 - Quality preset helpers for common FSR scale factors: Quality 1.5x, Balanced 1.7x, Performance 2.0x, Ultra Performance 3.0x.
-- Optional straight/premultiplied alpha handling.
+- Optional straight/premultiplied alpha handling with alpha-aware sharpening that avoids halos around transparency.
+- Optional deterministic ordered dithering (`Options::dither`) for `rgb565`, `bgr565`, `gray8`, and 8-bit outputs; off by default.
+- When sharpening is disabled, upscaling streams directly into the destination without the intermediate float image.
 
 ## Build
 
@@ -39,6 +41,8 @@ Disable examples/tests:
 ```sh
 meson setup build -Dexamples=false -Dtests=false
 ```
+
+Other options: `-Dtools=false` skips the `retrofsr_compare` metrics tool, `-Dbenchmarks=true` builds `retrofsr_bench`, and `-Dsimd=true` enables vectorization-friendly math flags (`-fno-math-errno`, `-fno-trapping-math`); the default build is the scalar fallback of the same kernels.
 
 ## Minimal use
 
@@ -116,6 +120,15 @@ Modes: `retro`, `fsr`, `fsr1`, `fsr1-quality`, `fsr1-balanced`, `fsr1-performanc
 | `QualityPreset::ultra_performance` | 3.0x | 640x360 |
 
 Use `retrofsr::quality_preset_source_size(preset, out_w, out_h)` to compute the source size, and `fsr1_style_options(preset)` for matching sharpening strength.
+
+## Quality and performance tooling
+
+With [`just`](https://github.com/casey/just) installed:
+
+- `just quality` — image-quality regression suite: golden images plus dither, alpha, and anti-ringing property tests.
+- `just golden` — regenerate golden expectations after an intentional image-quality change (review the diff before committing).
+- `just compare a.ppm b.ppm --min-psnr 40 --min-ssim 0.98` — MSE/PSNR/SSIM between two PPM images with optional pass/fail thresholds (`retrofsr_compare`).
+- `just bench` — throughput and latency per filter for 256x240, 320x240, 640x480, 1280x720, and 1920x1080 sources at 2x upscale (`retrofsr_bench`).
 
 ## Notes for emulators
 
