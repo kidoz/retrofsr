@@ -147,9 +147,8 @@ RgbImage read_ppm(const std::string& path) {
 
 double parse_double(std::string_view text, const char* what) {
     double value = 0.0;
-    const auto* end = text.data() + text.size();
-    const auto [ptr, ec] = std::from_chars(text.data(), end, value);
-    if (ec != std::errc{} || ptr != end) {
+    const auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (ec != std::errc{} || ptr != text.data() + text.size()) {
         throw std::runtime_error(std::string("invalid ") + what + ": " + std::string(text));
     }
     return value;
@@ -186,8 +185,8 @@ int main(int argc, char** argv) {
         }
 
         const double mse = mean_squared_error(a, b);
-        const double psnr = mse <= 0.0 ? std::numeric_limits<double>::infinity()
-                                       : 10.0 * std::log10((255.0 * 255.0) / mse);
+        const double psnr =
+            mse <= 0.0 ? std::numeric_limits<double>::infinity() : 10.0 * std::log10((255.0 * 255.0) / mse);
         const double ssim = mean_ssim(a, b);
 
         std::cout << "size: " << a.width << 'x' << a.height << '\n';
