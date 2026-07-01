@@ -1,2 +1,3 @@
 option('examples', type: 'boolean', value: true, description: 'Build example command-line tools')
 option('tests', type: 'boolean', value: true, description: 'Build tests')
+option('tools', type: 'boolean', value: true, description: 'Build developer tools (image comparison)')

@@ -64,3 +64,11 @@ if get_option('tests')
     install: false,
   )
 endif
+
+if get_option('tools')
+  executable(
+    'retrofsr_compare',
+    'tools/retrofsr_compare.cpp',
+    install: false,
+  )
+endif

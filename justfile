@@ -1,8 +1,8 @@
 set shell := ["sh", "-eu", "-c"]
 
 build_dir := env_var_or_default("BUILD_DIR", "buildDir")
-format_files := "include/retrofsr/retrofsr.hpp src/retrofsr.cpp tests/basic.cpp tests/golden.cpp tests/golden_support.hpp tests/gen_golden_data.cpp examples/scale_ppm.cpp"
-tidy_files := "src/retrofsr.cpp tests/basic.cpp tests/golden.cpp tests/gen_golden_data.cpp examples/scale_ppm.cpp"
+format_files := "include/retrofsr/retrofsr.hpp src/retrofsr.cpp tests/basic.cpp tests/golden.cpp tests/golden_support.hpp tests/gen_golden_data.cpp tests/fixtures.hpp tests/image_quality.cpp examples/scale_ppm.cpp tools/retrofsr_compare.cpp"
+tidy_files := "src/retrofsr.cpp tests/basic.cpp tests/golden.cpp tests/gen_golden_data.cpp tests/image_quality.cpp examples/scale_ppm.cpp tools/retrofsr_compare.cpp"
 
 default:
     @just --list
@@ -23,6 +23,14 @@ test: build
 # Regenerate golden-image expectations after an intentional image-quality change.
 golden: build
     ./"{{build_dir}}"/retrofsr_golden_gen > tests/golden_data.hpp
+
+# Image-quality regression suite: golden images plus quality/dither/alpha property tests.
+quality: build
+    ./"{{build_dir}}"/retrofsr_basic_test "[golden],[quality],[dither],[alpha],[fixtures]"
+
+# Compare two PPM images: prints MSE/PSNR/SSIM; pass --min-psnr/--min-ssim thresholds.
+compare a b *args: build
+    ./"{{build_dir}}"/retrofsr_compare "{{a}}" "{{b}}" {{args}}
 
 format:
     clang-format -i {{format_files}}
