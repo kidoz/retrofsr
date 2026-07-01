@@ -2,10 +2,11 @@
 
 `retrofsr` is a tiny C++23 CPU spatial upscaling library intended for emulator frontends and render backends. It is **FSR-1-inspired**, but it is not a copy of AMD's shader code. The implementation is clean-room C++ and MIT-licensed.
 
-It provides two practical presets:
+It provides three practical presets:
 
 - `retrofsr::retro_pixel_options()` for NES, Master System, Mega Drive/Genesis, SNES-style pixel art. This uses sharp bilinear filtering and no post-sharpening.
 - `retrofsr::fsr_like_options()` for already-filtered frames, 3D emulator output, blended video, or games that benefit from spatial edge-aware upscaling plus contrast-adaptive sharpening.
+- `retrofsr::fsr1_style_options(preset)` for the most faithful FSR-1-style result: an EASU-like edge-adaptive anisotropic filter plus RCAS-like robust sharpening, operating on gamma-encoded (perceptual) color the way FSR 1 does.
 
 ## Features
 
@@ -13,8 +14,11 @@ It provides two practical presets:
 - Meson build system.
 - CPU implementation; no Vulkan, D3D, OpenGL, or compute API required.
 - Supports `rgba8`, `bgra8`, `argb8`, `abgr8`, `xrgb8`, `xbgr8`, `rgbx8`, `bgrx8`, `rgb565`, `bgr565`, and `gray8`.
-- Filters: nearest, bilinear, sharp bilinear, Catmull-Rom, Lanczos3, edge-adaptive Lanczos.
-- Optional sRGB-aware interpolation and optional straight/premultiplied alpha handling.
+- Filters: nearest, bilinear, sharp bilinear, Catmull-Rom, Lanczos3, edge-adaptive Lanczos, EASU-like edge-adaptive anisotropic.
+- Sharpeners: contrast-adaptive unsharp mask, RCAS-like robust contrast-adaptive sharpening.
+- Color modes: sRGB (linearized), linear, and perceptual (gamma-encoded, FSR-1 style).
+- Quality preset helpers for common FSR scale factors: Quality 1.5x, Balanced 1.7x, Performance 2.0x, Ultra Performance 3.0x.
+- Optional straight/premultiplied alpha handling.
 
 ## Build
 
@@ -86,7 +90,32 @@ The example reads and writes binary PPM (`P6`) images:
 ./build/scale_ppm input.ppm output.ppm 1280 960 fsr
 ```
 
-Modes: `retro`, `fsr`, `nearest`, `bilinear`, `catmull`, `lanczos`.
+Modes: `retro`, `fsr`, `fsr1`, `fsr1-quality`, `fsr1-balanced`, `fsr1-performance`, `fsr1-ultra`, `nearest`, `bilinear`, `catmull`, `lanczos`, `easu`.
+
+## Choosing a mode
+
+**Filter presets:**
+
+- **Retro pixel** (`retro_pixel_options()`): pixel art and tile/sprite output where you want crisp texels. Sharp bilinear, no sharpening.
+- **FSR-like** (`fsr_like_options()`): edge-adaptive Lanczos in linearized sRGB. A good general default for filtered/3D frames when you want physically plausible blending.
+- **FSR-1-style** (`fsr1_style_options(preset)`): EASU-like filtering plus RCAS-like sharpening on perceptual color. Closest to how FSR 1 actually behaves; best for already-tonemapped 3D emulator output. Feed it post-tonemap color, and apply it before film grain or UI composition.
+
+**Color modes** (`Options::color_space`):
+
+- `srgb`: converts 8-bit sRGB to linear light before filtering and encodes back afterwards. Most physically correct blending; slightly more expensive.
+- `linear`: treats channel values as already-linear data. Use for non-color data or when the input really is linear.
+- `perceptual`: filters gamma-encoded values directly, as FSR 1 does. Preserves apparent contrast and costs the same as `linear`. Use with `Filter::easu` for FSR-style output.
+
+**Quality presets** map output size to a recommended render size:
+
+| Preset | Scale per axis | Example (1920x1080 output) |
+|---|---|---|
+| `QualityPreset::quality` | 1.5x | 1280x720 |
+| `QualityPreset::balanced` | 1.7x | 1129x635 |
+| `QualityPreset::performance` | 2.0x | 960x540 |
+| `QualityPreset::ultra_performance` | 3.0x | 640x360 |
+
+Use `retrofsr::quality_preset_source_size(preset, out_w, out_h)` to compute the source size, and `fsr1_style_options(preset)` for matching sharpening strength.
 
 ## Notes for emulators
 

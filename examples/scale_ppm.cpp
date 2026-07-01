@@ -119,6 +119,21 @@ retrofsr::Options options_from_mode(const std::string& mode) {
     if (mode == "fsr") {
         return retrofsr::fsr_like_options();
     }
+    if (mode == "fsr1") {
+        return retrofsr::fsr1_style_options();
+    }
+    if (mode == "fsr1-quality") {
+        return retrofsr::fsr1_style_options(retrofsr::QualityPreset::quality);
+    }
+    if (mode == "fsr1-balanced") {
+        return retrofsr::fsr1_style_options(retrofsr::QualityPreset::balanced);
+    }
+    if (mode == "fsr1-performance") {
+        return retrofsr::fsr1_style_options(retrofsr::QualityPreset::performance);
+    }
+    if (mode == "fsr1-ultra") {
+        return retrofsr::fsr1_style_options(retrofsr::QualityPreset::ultra_performance);
+    }
 
     auto options = retrofsr::fsr_like_options();
     options.sharpening = 0.0f;
@@ -130,6 +145,8 @@ retrofsr::Options options_from_mode(const std::string& mode) {
         options.filter = retrofsr::Filter::catmull_rom;
     } else if (mode == "lanczos") {
         options.filter = retrofsr::Filter::lanczos3;
+    } else if (mode == "easu") {
+        options.filter = retrofsr::Filter::easu;
     } else {
         throw std::runtime_error("unknown mode: " + mode);
     }
@@ -142,7 +159,8 @@ int main(int argc, char** argv) {
     try {
         if (argc < 5 || argc > 6) {
             std::cerr << "usage: scale_ppm <input.ppm> <output.ppm> <width> <height> "
-                         "[retro|fsr|nearest|bilinear|catmull|lanczos]\n";
+                         "[retro|fsr|fsr1|fsr1-quality|fsr1-balanced|fsr1-performance|fsr1-ultra"
+                         "|nearest|bilinear|catmull|lanczos|easu]\n";
             return 2;
         }
 
