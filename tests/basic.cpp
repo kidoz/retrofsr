@@ -63,6 +63,7 @@ TEST_CASE("upscale produces non-empty output for every filter", "[upscale]") {
     const retrofsr::Filter filters[] = {
         retrofsr::Filter::nearest,     retrofsr::Filter::bilinear, retrofsr::Filter::sharp_bilinear,
         retrofsr::Filter::catmull_rom, retrofsr::Filter::lanczos3, retrofsr::Filter::edge_adaptive_lanczos,
+        retrofsr::Filter::easu,
     };
     for (retrofsr::Filter filter : filters) {
         CAPTURE(static_cast<int>(filter));

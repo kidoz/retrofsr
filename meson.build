@@ -51,9 +51,16 @@ if get_option('tests')
   )
   test_exe = executable(
     'retrofsr_basic_test',
-    'tests/basic.cpp',
+    ['tests/basic.cpp', 'tests/golden.cpp'],
     dependencies: [retrofsr_dep, catch2_dep],
     install: false,
   )
   test('basic', test_exe)
+
+  executable(
+    'retrofsr_golden_gen',
+    'tests/gen_golden_data.cpp',
+    dependencies: retrofsr_dep,
+    install: false,
+  )
 endif

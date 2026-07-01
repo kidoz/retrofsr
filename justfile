@@ -1,8 +1,8 @@
 set shell := ["sh", "-eu", "-c"]
 
 build_dir := env_var_or_default("BUILD_DIR", "buildDir")
-format_files := "include/retrofsr/retrofsr.hpp src/retrofsr.cpp tests/basic.cpp examples/scale_ppm.cpp"
-tidy_files := "src/retrofsr.cpp tests/basic.cpp examples/scale_ppm.cpp"
+format_files := "include/retrofsr/retrofsr.hpp src/retrofsr.cpp tests/basic.cpp tests/golden.cpp tests/golden_support.hpp tests/gen_golden_data.cpp examples/scale_ppm.cpp"
+tidy_files := "src/retrofsr.cpp tests/basic.cpp tests/golden.cpp tests/gen_golden_data.cpp examples/scale_ppm.cpp"
 
 default:
     @just --list
@@ -19,6 +19,10 @@ build: setup
 
 test: build
     meson test -C "{{build_dir}}"
+
+# Regenerate golden-image expectations after an intentional image-quality change.
+golden: build
+    ./"{{build_dir}}"/retrofsr_golden_gen > tests/golden_data.hpp
 
 format:
     clang-format -i {{format_files}}
