@@ -60,6 +60,15 @@ enum class Sharpen : std::uint8_t {
     robust_contrast_adaptive,
 };
 
+/// Output quantization dithering.
+enum class Dither : std::uint8_t {
+    /// Round to the nearest representable value.
+    none,
+    /// Deterministic 4x4 ordered (Bayer) dithering. Reduces banding on rgb565, bgr565,
+    /// gray8, and other 8-bit outputs; stable across runs for identical inputs.
+    ordered,
+};
+
 /// Alpha handling for filtering.
 enum class AlphaMode : std::uint8_t {
     /// Ignore input alpha and write fully opaque alpha where the destination format has alpha.
@@ -101,6 +110,13 @@ struct Options {
 
     /// Sharpening algorithm applied when sharpening > 0.
     Sharpen sharpen = Sharpen::contrast_adaptive;
+
+    /// Output dithering applied when quantizing to the destination format.
+    Dither dither = Dither::none;
+
+    /// When alpha is straight or premultiplied, scale sharpening by local alpha and keep
+    /// sharpened premultiplied RGB within [0, alpha] to avoid halos around transparency.
+    bool alpha_aware_sharpening = true;
 
     /// Edge sensitivity for edge_adaptive_lanczos and easu. Higher values reduce ringing and
     /// stair-stepping more aggressively.

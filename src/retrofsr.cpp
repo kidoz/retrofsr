@@ -108,18 +108,32 @@ constexpr Color4& operator+=(Color4& x, Color4 y) noexcept {
     return static_cast<float>(value) / 255.0f;
 }
 
-[[nodiscard]] std::uint8_t to_u8(float value, ColorSpace color_space) noexcept {
+[[nodiscard]] float encode_channel(float value, ColorSpace color_space) noexcept {
     value = clamp01(value);
-    float encoded = value;
     if (color_space == ColorSpace::srgb) {
         if (value <= 0.0031308f) {
-            encoded = 12.92f * value;
-        } else {
-            encoded = 1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f;
+            return 12.92f * value;
         }
+        return clamp01(1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f);
     }
-    const auto rounded = static_cast<int>(std::lround(clamp01(encoded) * 255.0f));
-    return static_cast<std::uint8_t>(std::clamp(rounded, 0, 255));
+    return value;
+}
+
+// Quantize an encoded [0, 1] channel to [0, max_value]. dither is the rounding offset in
+// [0, 1); 0.5 reproduces round-to-nearest, an ordered-dither offset trades banding for
+// deterministic high-frequency noise.
+[[nodiscard]] std::uint16_t quantize_channel(float encoded, std::uint16_t max_value, float dither) noexcept {
+    const auto scaled = static_cast<int>(clamp01(encoded) * static_cast<float>(max_value) + dither);
+    return static_cast<std::uint16_t>(std::clamp(scaled, 0, static_cast<int>(max_value)));
+}
+
+[[nodiscard]] std::uint8_t to_u8(float value, ColorSpace color_space, float dither = 0.5f) noexcept {
+    return static_cast<std::uint8_t>(quantize_channel(encode_channel(value, color_space), 255, dither));
+}
+
+[[nodiscard]] constexpr float bayer4(std::uint32_t x, std::uint32_t y) noexcept {
+    constexpr std::array<std::uint8_t, 16> matrix = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
+    return (static_cast<float>(matrix[(y & 3u) * 4u + (x & 3u)]) + 0.5f) / 16.0f;
 }
 
 [[nodiscard]] const std::byte* row_ptr(ImageView image, std::int32_t y) noexcept {
@@ -184,14 +198,15 @@ constexpr Color4& operator+=(Color4& x, Color4 y) noexcept {
     return {};
 }
 
-void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace color_space, bool force_opaque) noexcept {
+void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace color_space, bool force_opaque,
+                     float dither = 0.5f) noexcept {
     auto b = [](std::uint8_t v) noexcept { return static_cast<std::byte>(v); };
 
     c = clamp_color(c);
-    const auto r = to_u8(c.r, color_space);
-    const auto g = to_u8(c.g, color_space);
-    const auto bl = to_u8(c.b, color_space);
-    const auto a = force_opaque ? std::uint8_t{255} : to_u8(c.a, ColorSpace::linear);
+    const auto r = to_u8(c.r, color_space, dither);
+    const auto g = to_u8(c.g, color_space, dither);
+    const auto bl = to_u8(c.b, color_space, dither);
+    const auto a = force_opaque ? std::uint8_t{255} : to_u8(c.a, ColorSpace::linear, dither);
 
     switch (format) {
     case PixelFormat::rgba8:
@@ -243,25 +258,27 @@ void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace colo
         p[3] = b(255);
         break;
     case PixelFormat::rgb565: {
-        const auto r5 = static_cast<std::uint16_t>((static_cast<unsigned>(r) * 31u + 127u) / 255u);
-        const auto g6 = static_cast<std::uint16_t>((static_cast<unsigned>(g) * 63u + 127u) / 255u);
-        const auto b5 = static_cast<std::uint16_t>((static_cast<unsigned>(bl) * 31u + 127u) / 255u);
+        // Quantize straight from the encoded floats: one rounding step, and the dither
+        // offset lands on the real 5/6-bit grid instead of an intermediate 8-bit one.
+        const auto r5 = quantize_channel(encode_channel(c.r, color_space), 31, dither);
+        const auto g6 = quantize_channel(encode_channel(c.g, color_space), 63, dither);
+        const auto b5 = quantize_channel(encode_channel(c.b, color_space), 31, dither);
         const auto packed = static_cast<std::uint16_t>((r5 << 11) | (g6 << 5) | b5);
         p[0] = b(static_cast<std::uint8_t>(packed & 0xff));
         p[1] = b(static_cast<std::uint8_t>(packed >> 8));
         break;
     }
     case PixelFormat::bgr565: {
-        const auto b5 = static_cast<std::uint16_t>((static_cast<unsigned>(bl) * 31u + 127u) / 255u);
-        const auto g6 = static_cast<std::uint16_t>((static_cast<unsigned>(g) * 63u + 127u) / 255u);
-        const auto r5 = static_cast<std::uint16_t>((static_cast<unsigned>(r) * 31u + 127u) / 255u);
+        const auto b5 = quantize_channel(encode_channel(c.b, color_space), 31, dither);
+        const auto g6 = quantize_channel(encode_channel(c.g, color_space), 63, dither);
+        const auto r5 = quantize_channel(encode_channel(c.r, color_space), 31, dither);
         const auto packed = static_cast<std::uint16_t>((b5 << 11) | (g6 << 5) | r5);
         p[0] = b(static_cast<std::uint8_t>(packed & 0xff));
         p[1] = b(static_cast<std::uint8_t>(packed >> 8));
         break;
     }
     case PixelFormat::gray8: {
-        const auto gray = to_u8(luma(c), color_space);
+        const auto gray = to_u8(luma(c), color_space, dither);
         p[0] = b(gray);
         break;
     }
@@ -596,12 +613,19 @@ template<typename Fn> void parallel_rows(std::uint32_t height, std::uint32_t req
     }
 }
 
-void apply_sharpen(std::vector<Color4>& image, std::uint32_t width, std::uint32_t height, float sharpening,
-                   std::uint32_t thread_count) {
-    sharpening = std::clamp(sharpening, 0.0f, 1.0f);
+// True when sharpening should respect alpha: the work buffer holds premultiplied color, so
+// unrestrained sharpening near transparency creates RGB energy the alpha cannot carry (halos).
+[[nodiscard]] constexpr bool alpha_aware_sharpen(const Options& options) noexcept {
+    return options.alpha_aware_sharpening && options.alpha != AlphaMode::ignore;
+}
+
+void apply_sharpen(std::vector<Color4>& image, std::uint32_t width, std::uint32_t height, const Options& options) {
+    const float sharpening = std::clamp(options.sharpening, 0.0f, 1.0f);
     if (sharpening <= 0.0f || width == 0 || height == 0) {
         return;
     }
+    const std::uint32_t thread_count = options.thread_count;
+    const bool alpha_aware = alpha_aware_sharpen(options);
 
     const std::vector<Color4> src = image;
     const auto at = [&](std::int32_t x, std::int32_t y) noexcept -> Color4 {
@@ -628,7 +652,10 @@ void apply_sharpen(std::vector<Color4>& image, std::uint32_t width, std::uint32_
                 const float lmax = std::max({l0, luma(n), luma(s), luma(w), luma(e)});
                 const float range = lmax - lmin;
                 const float adaptive = range / (range + 0.10f);
-                const float amount = base_amount * adaptive;
+                float amount = base_amount * adaptive;
+                if (alpha_aware) {
+                    amount *= clamp01(c.a);
+                }
 
                 const Color4 blur = (n + s + w + e) * 0.25f;
                 Color4 out = c + (c - blur) * amount;
@@ -646,18 +673,25 @@ void apply_sharpen(std::vector<Color4>& image, std::uint32_t width, std::uint32_
                 out.b = std::clamp(out.b, min_b, max_b);
                 out.a = c.a;
 
+                if (alpha_aware) {
+                    const float cap = clamp01(c.a);
+                    out.r = std::min(out.r, cap);
+                    out.g = std::min(out.g, cap);
+                    out.b = std::min(out.b, cap);
+                }
                 image[static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x)] = clamp_color(out);
             }
         }
     });
 }
 
-void apply_rcas(std::vector<Color4>& image, std::uint32_t width, std::uint32_t height, float sharpening,
-                std::uint32_t thread_count) {
-    sharpening = std::clamp(sharpening, 0.0f, 1.0f);
+void apply_rcas(std::vector<Color4>& image, std::uint32_t width, std::uint32_t height, const Options& options) {
+    const float sharpening = std::clamp(options.sharpening, 0.0f, 1.0f);
     if (sharpening <= 0.0f || width == 0 || height == 0) {
         return;
     }
+    const std::uint32_t thread_count = options.thread_count;
+    const bool alpha_aware = alpha_aware_sharpen(options);
 
     const std::vector<Color4> src = image;
     const auto at = [&](std::int32_t x, std::int32_t y) noexcept -> Color4 {
@@ -693,12 +727,20 @@ void apply_rcas(std::vector<Color4>& image, std::uint32_t width, std::uint32_t h
                 const float lobe_r = channel_lobe(n.r, s.r, w.r, e.r);
                 const float lobe_g = channel_lobe(n.g, s.g, w.g, e.g);
                 const float lobe_b = channel_lobe(n.b, s.b, w.b, e.b);
-                const float lobe =
-                    std::max(-lobe_limit, std::min(std::max({lobe_r, lobe_g, lobe_b}), 0.0f)) * sharpening;
+                float lobe = std::max(-lobe_limit, std::min(std::max({lobe_r, lobe_g, lobe_b}), 0.0f)) * sharpening;
+                if (alpha_aware) {
+                    lobe *= clamp01(c.a);
+                }
 
                 const float rcp = 1.0f / (4.0f * lobe + 1.0f);
                 Color4 out = ((n + s + w + e) * lobe + c) * rcp;
                 out.a = c.a;
+                if (alpha_aware) {
+                    const float cap = clamp01(c.a);
+                    out.r = std::min(out.r, cap);
+                    out.g = std::min(out.g, cap);
+                    out.b = std::min(out.b, cap);
+                }
                 image[static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x)] = clamp_color(out);
             }
         }
@@ -829,20 +871,22 @@ Status upscale(ImageView src, MutableImageView dst, Options options) {
     });
 
     if (options.sharpen == Sharpen::robust_contrast_adaptive) {
-        apply_rcas(work, dst.width, dst.height, options.sharpening, options.thread_count);
+        apply_rcas(work, dst.width, dst.height, options);
     } else {
-        apply_sharpen(work, dst.width, dst.height, options.sharpening, options.thread_count);
+        apply_sharpen(work, dst.width, dst.height, options);
     }
 
     parallel_rows(dst.height, options.thread_count, [&](std::uint32_t y0, std::uint32_t y1) {
         const bool force_opaque = options.alpha == AlphaMode::ignore || !has_alpha(dst.format);
+        const std::size_t dst_bpp = bytes_per_pixel(dst.format);
         for (std::uint32_t y = y0; y < y1; ++y) {
             auto* row = row_ptr(dst, static_cast<std::int32_t>(y));
             for (std::uint32_t x = 0; x < dst.width; ++x) {
                 const Color4 c =
                     prepare_for_store(work[static_cast<std::size_t>(y) * dst.width + x], options, dst.format);
-                store_raw_pixel(row + static_cast<std::ptrdiff_t>(x) * bytes_per_pixel(dst.format), dst.format, c,
-                                options.color_space, force_opaque);
+                const float dither = options.dither == Dither::ordered ? bayer4(x, y) : 0.5f;
+                store_raw_pixel(row + static_cast<std::ptrdiff_t>(x * dst_bpp), dst.format, c, options.color_space,
+                                force_opaque, dither);
             }
         }
     });
