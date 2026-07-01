@@ -1,0 +1,20 @@
+---
+Checks: >
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  -bugprone-branch-clone,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  -bugprone-infinite-loop,
+  -bugprone-narrowing-conversions,
+  performance-*,
+  portability-*,
+  modernize-use-default-member-init,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-use-using,
+  misc-unused-parameters
+WarningsAsErrors: '*'
+HeaderFilterRegex: '^(include|src|tests|examples)/'
+FormatStyle: file

@@ -1,0 +1,10 @@
+# IDE / platform-local
+/.idea/
+.DS_Store
+
+# Build outputs
+/build*/
+
+# Meson wrap downloads and extracted subprojects (keep the .wrap files)
+/subprojects/*
+!/subprojects/*.wrap

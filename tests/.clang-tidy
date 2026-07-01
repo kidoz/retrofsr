@@ -1,0 +1,7 @@
+---
+# Catch2's TEST_CASE macro expands into static registration objects whose
+# constructors may throw, which trips bugprone-throwing-static-initialization.
+# That is inherent to the framework, so disable just that check under tests/.
+InheritParentConfig: true
+Checks: >
+  -bugprone-throwing-static-initialization
