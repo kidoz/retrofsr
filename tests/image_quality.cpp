@@ -198,6 +198,50 @@ TEST_CASE("straight-alpha sharpening does not leak hidden background color", "[a
     }
 }
 
+TEST_CASE("easu reconstructs hard axis-aligned edges monotonically", "[quality][easu]") {
+    // Regression for the anisotropy defect: tightening the kernel across the gradient
+    // pushed every tap of a hard edge into the negative lobe, inverting tap weights and
+    // producing a reversed bright/dark fringe (profile like 0, 255, 0, 255).
+    constexpr std::uint32_t sw = 16;
+    constexpr std::uint32_t sh = 16;
+    constexpr std::uint32_t dw = 48;
+    constexpr std::uint32_t dh = 48;
+
+    for (const bool vertical : {true, false}) {
+        CAPTURE(vertical);
+        std::vector<std::byte> src(static_cast<std::size_t>(sw) * sh * 4);
+        for (std::uint32_t y = 0; y < sh; ++y) {
+            for (std::uint32_t x = 0; x < sw; ++x) {
+                const std::size_t i = (static_cast<std::size_t>(y) * sw + x) * 4;
+                const std::uint8_t v = (vertical ? x : y) < sw / 2 ? 0 : 255;
+                src[i + 0] = static_cast<std::byte>(v);
+                src[i + 1] = static_cast<std::byte>(v);
+                src[i + 2] = static_cast<std::byte>(v);
+                src[i + 3] = static_cast<std::byte>(255);
+            }
+        }
+
+        Options options{};
+        options.filter = Filter::easu;
+        options.color_space = ColorSpace::linear;
+        options.sharpening = 0.0f;
+        const auto out = upscale_to(src, sw, sh, dw, dh, PixelFormat::rgba8, options);
+
+        // Every row (or column) profile crossing the edge must be non-decreasing.
+        for (std::uint32_t line = 0; line < (vertical ? dh : dw); ++line) {
+            int prev = -1;
+            for (std::uint32_t step = 0; step < (vertical ? dw : dh); ++step) {
+                const std::uint32_t x = vertical ? step : line;
+                const std::uint32_t y = vertical ? line : step;
+                const int v = static_cast<std::uint8_t>(out[(static_cast<std::size_t>(y) * dw + x) * 4]);
+                CAPTURE(line, step, prev, v);
+                REQUIRE(v >= prev);
+                prev = v;
+            }
+        }
+    }
+}
+
 TEST_CASE("generated fixtures upscale cleanly with every filter", "[fixtures]") {
     for (const auto pattern : fixtures::patterns) {
         const auto src = fixtures::make_rgba(pattern, 16, 12);

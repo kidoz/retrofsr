@@ -507,8 +507,11 @@ void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace colo
     accumulate_gradient(1, 2, (1.0f - fx) * fy);
     accumulate_gradient(2, 2, fx * fy);
 
-    // Strong coherent edges stretch the kernel along the edge and tighten it across,
-    // which smooths stair-stepping without blurring the edge itself.
+    // Strong coherent diagonal edges stretch the kernel along the edge, which smooths
+    // stair-stepping. The stretch is orientation-dependent as in reference EASU: an
+    // axis-aligned edge gets an isotropic kernel, because widening helps only where the
+    // sampling grid staircases. The kernel is never tightened across the gradient — that
+    // would push every tap of a hard edge into the negative lobe and invert the weights.
     float grad_x = 1.0f;
     float grad_y = 0.0f;
     float stretch = 0.0f;
@@ -517,10 +520,11 @@ void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace colo
         const float dir_len = std::sqrt(dir_len2);
         grad_x = dir_x / dir_len;
         grad_y = dir_y / dir_len;
-        stretch = clamp01(dir_len * 2.0f) * clamp01(options.edge_strength);
+        // 0 for axis-aligned gradients, 1 at 45 degrees.
+        const float diagonality = 2.0f * std::min(grad_x * grad_x, grad_y * grad_y);
+        stretch = clamp01(dir_len * 2.0f) * diagonality * clamp01(options.edge_strength);
     }
-    const float across_scale = 1.0f + stretch;
-    const float along_scale = 1.0f / (1.0f + 0.5f * stretch);
+    const float along_scale = 1.0f / (1.0f + stretch);
 
     Color4 sum{};
     float weight_sum = 0.0f;
@@ -528,7 +532,7 @@ void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace colo
         const float oy = static_cast<float>(base_y - 1 + j) - sy;
         for (std::int32_t i = 0; i < 4; ++i) {
             const float ox = static_cast<float>(base_x - 1 + i) - sx;
-            const float across = (ox * grad_x + oy * grad_y) * across_scale;
+            const float across = ox * grad_x + oy * grad_y;
             const float along = (oy * grad_x - ox * grad_y) * along_scale;
             const float w = easu_kernel(across * across + along * along);
             if (w == 0.0f) {
@@ -539,9 +543,13 @@ void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace colo
         }
     }
 
-    Color4 out = taps[fy > 0.5f ? 2 : 1][fx > 0.5f ? 2 : 1];
-    if (std::abs(weight_sum) > 1.0e-7f) {
+    // The nearest 2x2 taps always carry positive weight, so a healthy sum is strictly
+    // positive; anything else means the kernel degenerated — fall back to bilinear.
+    Color4 out;
+    if (weight_sum > 1.0e-5f) {
         out = sum / weight_sum;
+    } else {
+        out = sample_bilinear(image, sx, sy, options);
     }
 
     // Anti-ringing: clamp to the min/max of the nearest 2x2 source quad so the negative
