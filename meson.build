@@ -50,13 +50,19 @@ pkg.generate(
   version: meson.project_version(),
 )
 
+# CLI tests are plain python scripts; skip them gracefully where python3 is absent.
+python3 = find_program('python3', required: false)
+
 if get_option('examples')
-  executable(
+  scale_ppm_exe = executable(
     'scale_ppm',
     'examples/scale_ppm.cpp',
     dependencies: retrofsr_dep,
     install: false,
   )
+  if get_option('tests') and python3.found()
+    test('scale-ppm-cli', python3, args: [files('tests/tools/test_scale_ppm.py'), scale_ppm_exe])
+  endif
 endif
 
 if get_option('tests')
@@ -86,11 +92,14 @@ if get_option('tests')
 endif
 
 if get_option('tools')
-  executable(
+  retrofsr_compare_exe = executable(
     'retrofsr_compare',
     'tools/retrofsr_compare.cpp',
     install: false,
   )
+  if get_option('tests') and python3.found()
+    test('compare-cli', python3, args: [files('tests/tools/test_compare_cli.py'), retrofsr_compare_exe])
+  endif
 endif
 
 if get_option('benchmarks')
