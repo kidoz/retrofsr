@@ -354,6 +354,15 @@ void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace colo
     return 0.0f;
 }
 
+// Cap on the widened per-axis kernel support during minification: sampling is O(r^2)
+// per pixel and non-separable, so extreme minification should pre-reduce instead.
+inline constexpr float max_minify_support = 8.0f;
+
+// Clamp a requested minification factor so radius * minify never exceeds the support cap.
+[[nodiscard]] constexpr float clamp_minify(float minify, float radius) noexcept {
+    return std::clamp(minify, 1.0f, max_minify_support / radius);
+}
+
 [[nodiscard]] constexpr float smooth_fraction_for_sharp_bilinear(float fraction, float upscale_factor) noexcept {
     if (upscale_factor <= 1.0f) {
         return fraction;
@@ -389,15 +398,27 @@ void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace colo
     return cx0 * (1.0f - fy) + cx1 * fy;
 }
 
-[[nodiscard]] Color4 sample_catmull_rom(ImageView image, float sx, float sy, const Options& options) noexcept {
-    const auto base_x = static_cast<std::int32_t>(std::floor(sx));
-    const auto base_y = static_cast<std::int32_t>(std::floor(sy));
+[[nodiscard]] Color4 sample_catmull_rom(ImageView image, float sx, float sy, const Options& options,
+                                        float minify_x = 1.0f, float minify_y = 1.0f) noexcept {
+    minify_x = clamp_minify(minify_x, 2.0f);
+    minify_y = clamp_minify(minify_y, 2.0f);
+    const float support_x = 2.0f * minify_x;
+    const float support_y = 2.0f * minify_y;
+
+    const auto min_x = static_cast<std::int32_t>(std::ceil(sx - support_x));
+    const auto max_x = static_cast<std::int32_t>(std::floor(sx + support_x));
+    const auto min_y = static_cast<std::int32_t>(std::ceil(sy - support_y));
+    const auto max_y = static_cast<std::int32_t>(std::floor(sy + support_y));
+
     Color4 sum{};
     float weight_sum = 0.0f;
-    for (std::int32_t yy = base_y - 1; yy <= base_y + 2; ++yy) {
-        const float wy = catmull_rom_kernel(sy - static_cast<float>(yy));
-        for (std::int32_t xx = base_x - 1; xx <= base_x + 2; ++xx) {
-            const float wx = catmull_rom_kernel(sx - static_cast<float>(xx));
+    for (std::int32_t yy = min_y; yy <= max_y; ++yy) {
+        const float wy = catmull_rom_kernel((sy - static_cast<float>(yy)) / minify_y);
+        if (wy == 0.0f) {
+            continue;
+        }
+        for (std::int32_t xx = min_x; xx <= max_x; ++xx) {
+            const float wx = catmull_rom_kernel((sx - static_cast<float>(xx)) / minify_x);
             const float w = wx * wy;
             if (w == 0.0f) {
                 continue;
@@ -407,30 +428,72 @@ void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace colo
         }
     }
     if (std::abs(weight_sum) > 1.0e-7f) {
+        sum = sum / weight_sum;
+    }
+    return sum;
+}
+
+// Widened triangle (tent) reconstruction for minified bilinear-family sampling; at
+// minify == 1 this is exactly bilinear, so it is only dispatched when minifying.
+[[nodiscard]] Color4 sample_triangle(ImageView image, float sx, float sy, const Options& options, float minify_x,
+                                     float minify_y) noexcept {
+    minify_x = clamp_minify(minify_x, 1.0f);
+    minify_y = clamp_minify(minify_y, 1.0f);
+
+    const auto min_x = static_cast<std::int32_t>(std::ceil(sx - minify_x));
+    const auto max_x = static_cast<std::int32_t>(std::floor(sx + minify_x));
+    const auto min_y = static_cast<std::int32_t>(std::ceil(sy - minify_y));
+    const auto max_y = static_cast<std::int32_t>(std::floor(sy + minify_y));
+
+    Color4 sum{};
+    float weight_sum = 0.0f;
+    for (std::int32_t yy = min_y; yy <= max_y; ++yy) {
+        const float wy = 1.0f - std::abs(sy - static_cast<float>(yy)) / minify_y;
+        if (wy <= 0.0f) {
+            continue;
+        }
+        for (std::int32_t xx = min_x; xx <= max_x; ++xx) {
+            const float wx = 1.0f - std::abs(sx - static_cast<float>(xx)) / minify_x;
+            if (wx <= 0.0f) {
+                continue;
+            }
+            const float w = wx * wy;
+            sum += load_source(image, xx, yy, options) * w;
+            weight_sum += w;
+        }
+    }
+    if (weight_sum > 1.0e-7f) {
         sum = sum / weight_sum;
     }
     return sum;
 }
 
 [[nodiscard]] Color4 sample_lanczos(ImageView image, float sx, float sy, const Options& options, float radius_x,
-                                    float radius_y) noexcept {
+                                    float radius_y, float minify_x = 1.0f, float minify_y = 1.0f) noexcept {
     radius_x = std::max(radius_x, 1.0f);
     radius_y = std::max(radius_y, 1.0f);
+    // Minification stretches the kernel so each output pixel averages a proportionally
+    // wider source neighborhood (the standard anti-aliasing approach). minify == 1 is
+    // bit-identical to the plain upscaling path.
+    minify_x = clamp_minify(minify_x, radius_x);
+    minify_y = clamp_minify(minify_y, radius_y);
+    const float support_x = radius_x * minify_x;
+    const float support_y = radius_y * minify_y;
 
-    const auto min_x = static_cast<std::int32_t>(std::ceil(sx - radius_x));
-    const auto max_x = static_cast<std::int32_t>(std::floor(sx + radius_x));
-    const auto min_y = static_cast<std::int32_t>(std::ceil(sy - radius_y));
-    const auto max_y = static_cast<std::int32_t>(std::floor(sy + radius_y));
+    const auto min_x = static_cast<std::int32_t>(std::ceil(sx - support_x));
+    const auto max_x = static_cast<std::int32_t>(std::floor(sx + support_x));
+    const auto min_y = static_cast<std::int32_t>(std::ceil(sy - support_y));
+    const auto max_y = static_cast<std::int32_t>(std::floor(sy + support_y));
 
     Color4 sum{};
     float weight_sum = 0.0f;
     for (std::int32_t yy = min_y; yy <= max_y; ++yy) {
-        const float wy = lanczos_kernel(sy - static_cast<float>(yy), radius_y);
+        const float wy = lanczos_kernel((sy - static_cast<float>(yy)) / minify_y, radius_y);
         if (wy == 0.0f) {
             continue;
         }
         for (std::int32_t xx = min_x; xx <= max_x; ++xx) {
-            const float wx = lanczos_kernel(sx - static_cast<float>(xx), radius_x);
+            const float wx = lanczos_kernel((sx - static_cast<float>(xx)) / minify_x, radius_x);
             const float w = wx * wy;
             if (w == 0.0f) {
                 continue;
@@ -445,8 +508,61 @@ void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace colo
     return sum;
 }
 
-[[nodiscard]] Color4 sample_edge_adaptive_lanczos(ImageView image, float sx, float sy,
-                                                  const Options& options) noexcept {
+[[nodiscard]] constexpr float easu_kernel(float d2) noexcept {
+    // Lanczos2-like polynomial window evaluated on squared distance: unit at 0, zero
+    // crossings at distance 1 and 2, one negative lobe in between.
+    if (d2 >= 4.0f) {
+        return 0.0f;
+    }
+    const float base = 0.4f * d2 - 1.0f;
+    const float window = 0.25f * d2 - 1.0f;
+    return ((25.0f / 16.0f) * base * base - (25.0f / 16.0f - 1.0f)) * window * window;
+}
+
+// Minified EASU-family sampling: the edge-direction/anisotropy stage assumes upscaling,
+// so minification uses the same Lanczos2-like kernel widened per axis, with the
+// anti-ringing clamp taken over the whole contributing window.
+[[nodiscard]] Color4 sample_easu_minified(ImageView image, float sx, float sy, const Options& options, float minify_x,
+                                          float minify_y) noexcept {
+    minify_x = clamp_minify(minify_x, 2.0f);
+    minify_y = clamp_minify(minify_y, 2.0f);
+    const float support_x = 2.0f * minify_x;
+    const float support_y = 2.0f * minify_y;
+
+    const auto min_x = static_cast<std::int32_t>(std::ceil(sx - support_x));
+    const auto max_x = static_cast<std::int32_t>(std::floor(sx + support_x));
+    const auto min_y = static_cast<std::int32_t>(std::ceil(sy - support_y));
+    const auto max_y = static_cast<std::int32_t>(std::floor(sy + support_y));
+
+    Color4 sum{};
+    float weight_sum = 0.0f;
+    Color4 lo{1.0f, 1.0f, 1.0f, 1.0f};
+    Color4 hi{0.0f, 0.0f, 0.0f, 0.0f};
+    for (std::int32_t yy = min_y; yy <= max_y; ++yy) {
+        const float dy = (sy - static_cast<float>(yy)) / minify_y;
+        for (std::int32_t xx = min_x; xx <= max_x; ++xx) {
+            const float dx = (sx - static_cast<float>(xx)) / minify_x;
+            const float w = easu_kernel(dx * dx + dy * dy);
+            if (w == 0.0f) {
+                continue;
+            }
+            const Color4 t = load_source(image, xx, yy, options);
+            sum += t * w;
+            weight_sum += w;
+            lo = {std::min(lo.r, t.r), std::min(lo.g, t.g), std::min(lo.b, t.b), std::min(lo.a, t.a)};
+            hi = {std::max(hi.r, t.r), std::max(hi.g, t.g), std::max(hi.b, t.b), std::max(hi.a, t.a)};
+        }
+    }
+    if (weight_sum <= 1.0e-5f) {
+        return sample_triangle(image, sx, sy, options, minify_x, minify_y);
+    }
+    const Color4 out = sum / weight_sum;
+    return {std::clamp(out.r, lo.r, hi.r), std::clamp(out.g, lo.g, hi.g), std::clamp(out.b, lo.b, hi.b),
+            std::clamp(out.a, lo.a, hi.a)};
+}
+
+[[nodiscard]] Color4 sample_edge_adaptive_lanczos(ImageView image, float sx, float sy, const Options& options,
+                                                  float minify_x = 1.0f, float minify_y = 1.0f) noexcept {
     const auto ix = static_cast<std::int32_t>(std::floor(sx + 0.5f));
     const auto iy = static_cast<std::int32_t>(std::floor(sy + 0.5f));
 
@@ -464,18 +580,7 @@ void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace colo
     // Shrink the filter radius across strong local gradients to reduce halos around hard emulator edges.
     const float radius_x = std::lerp(3.0f, 1.35f, tx);
     const float radius_y = std::lerp(3.0f, 1.35f, ty);
-    return sample_lanczos(image, sx, sy, options, radius_x, radius_y);
-}
-
-[[nodiscard]] constexpr float easu_kernel(float d2) noexcept {
-    // Lanczos2-like polynomial window evaluated on squared distance: unit at 0, zero
-    // crossings at distance 1 and 2, one negative lobe in between.
-    if (d2 >= 4.0f) {
-        return 0.0f;
-    }
-    const float base = 0.4f * d2 - 1.0f;
-    const float window = 0.25f * d2 - 1.0f;
-    return ((25.0f / 16.0f) * base * base - (25.0f / 16.0f - 1.0f)) * window * window;
+    return sample_lanczos(image, sx, sy, options, radius_x, radius_y, minify_x, minify_y);
 }
 
 [[nodiscard]] Color4 sample_easu(ImageView image, float sx, float sy, const Options& options) noexcept {
@@ -572,27 +677,43 @@ struct SampleParams {
     /// dst/src upscale factors, used by sharp_bilinear's fraction narrowing.
     float fraction_scale_x = 1.0f;
     float fraction_scale_y = 1.0f;
+    /// Per-axis minification factors (>= 1; 1 when upscaling on that axis). Kernels are
+    /// widened by these so downscaled output is anti-aliased instead of point-sampled.
+    float minify_x = 1.0f;
+    float minify_y = 1.0f;
 };
 
 [[nodiscard]] Color4 sample_filter(ImageView image, float sx, float sy, SampleParams params,
                                    const Options& options) noexcept {
+    const bool minifying = params.minify_x > 1.0f || params.minify_y > 1.0f;
     switch (options.filter) {
     case Filter::nearest:
+        // Deliberate point sampling; documented as aliasing under minification.
         return sample_nearest(image, sx, sy, options);
     case Filter::bilinear:
-        return sample_bilinear(image, sx, sy, options);
     case Filter::sharp_bilinear:
-        return sample_bilinear(image, sx, sy, options, params.fraction_scale_x, params.fraction_scale_y);
+        // sharp_bilinear's fraction narrowing only applies when upscaling; when either
+        // axis minifies, both behave as the widened triangle reconstruction.
+        if (minifying) {
+            return sample_triangle(image, sx, sy, options, params.minify_x, params.minify_y);
+        }
+        if (options.filter == Filter::sharp_bilinear) {
+            return sample_bilinear(image, sx, sy, options, params.fraction_scale_x, params.fraction_scale_y);
+        }
+        return sample_bilinear(image, sx, sy, options);
     case Filter::catmull_rom:
-        return sample_catmull_rom(image, sx, sy, options);
+        return sample_catmull_rom(image, sx, sy, options, params.minify_x, params.minify_y);
     case Filter::lanczos3:
-        return sample_lanczos(image, sx, sy, options, 3.0f, 3.0f);
+        return sample_lanczos(image, sx, sy, options, 3.0f, 3.0f, params.minify_x, params.minify_y);
     case Filter::edge_adaptive_lanczos:
-        return sample_edge_adaptive_lanczos(image, sx, sy, options);
+        return sample_edge_adaptive_lanczos(image, sx, sy, options, params.minify_x, params.minify_y);
     case Filter::easu:
+        if (minifying) {
+            return sample_easu_minified(image, sx, sy, options, params.minify_x, params.minify_y);
+        }
         return sample_easu(image, sx, sy, options);
     }
-    return sample_edge_adaptive_lanczos(image, sx, sy, options);
+    return sample_edge_adaptive_lanczos(image, sx, sy, options, params.minify_x, params.minify_y);
 }
 
 template<typename Fn> void parallel_rows(std::uint32_t height, std::uint32_t requested_threads, Fn&& fn) {
@@ -894,6 +1015,8 @@ Status upscale(ImageView src, MutableImageView dst, Options options) {
     const SampleParams params{
         static_cast<float>(dst.width) / static_cast<float>(src.width),
         static_cast<float>(dst.height) / static_cast<float>(src.height),
+        std::max(1.0f, scale_x),
+        std::max(1.0f, scale_y),
     };
 
     // Hoisted per-column source coordinates; same expression the per-pixel path used.

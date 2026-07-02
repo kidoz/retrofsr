@@ -262,7 +262,13 @@ enum class Status : std::uint8_t {
 /// Human-readable status text; string has static lifetime.
 [[nodiscard]] const char* status_message(Status status) noexcept;
 
-/// Upscale src into dst. Source and destination memory must not overlap.
+/// Resize src into dst. Source and destination memory must not overlap.
+///
+/// Upscaling is the primary use; downscaling is supported and anti-aliased by widening
+/// the filter kernel per axis (capped at 8 source texels of support, so pre-reduce for
+/// extreme minification). Exceptions: Filter::nearest stays point-sampled and will
+/// alias; sharp_bilinear behaves as bilinear when an axis minifies; easu falls back to
+/// a widened isotropic kernel with its anti-ringing clamp.
 ///
 /// With sharpening enabled the function allocates a floating-point image of
 /// dst.width * dst.height pixels and the sharpening pass copies it, so peak temporary
