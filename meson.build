@@ -1,7 +1,7 @@
 project(
   'retrofsr',
   'cpp',
-  version: '0.4.2',
+  version: '0.5.0',
   license: 'MIT',
   default_options: [
     'cpp_std=c++23',
