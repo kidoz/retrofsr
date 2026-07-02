@@ -10,11 +10,15 @@ Checks: >
   -bugprone-narrowing-conversions,
   performance-*,
   portability-*,
+  -portability-avoid-pragma-once,
   modernize-use-default-member-init,
   modernize-use-nullptr,
   modernize-use-override,
   modernize-use-using,
   misc-unused-parameters
 WarningsAsErrors: '*'
-HeaderFilterRegex: '^(include|src|tests|examples)/'
+# Meson compile commands run from the build dir, so project headers appear as
+# ../include/... (never ^include/). Anchor each alternative to the path start or a
+# ../ hop so subprojects/Catch2-*/src/... does not match the src/ alternative.
+HeaderFilterRegex: '(^|\.\./)(include|src|tests|examples)/'
 FormatStyle: file
