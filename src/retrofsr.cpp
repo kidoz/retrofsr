@@ -616,8 +616,10 @@ template<typename Fn> void parallel_rows(std::uint32_t height, std::uint32_t req
     std::vector<std::jthread> workers;
     workers.reserve(threads);
     for (std::uint32_t t = 0; t < threads; ++t) {
-        const std::uint32_t y0 = (height * t) / threads;
-        const std::uint32_t y1 = (height * (t + 1)) / threads;
+        // 64-bit partition math: height can be up to INT32_MAX, so height * threads
+        // would wrap a 32-bit product and hand overlapping row ranges to workers.
+        const auto y0 = static_cast<std::uint32_t>(static_cast<std::uint64_t>(height) * t / threads);
+        const auto y1 = static_cast<std::uint32_t>(static_cast<std::uint64_t>(height) * (t + 1) / threads);
         workers.emplace_back([&fn, y0, y1] { fn(y0, y1); });
     }
 }
@@ -803,6 +805,18 @@ void apply_rcas(std::vector<Color4>& image, std::uint32_t width, std::uint32_t h
     return stride == 0 || stride >= min_stride;
 }
 
+// Reject views whose byte extent cannot be addressed with ptrdiff_t: row_ptr computes
+// y * stride in signed arithmetic and buffers_overlap sums the full extent, so an
+// oversized stride would silently wrap both. Dimensions and stride minimums are
+// already validated when this runs.
+[[nodiscard]] bool extent_overflows(std::uint32_t w, std::uint32_t h, PixelFormat format,
+                                    std::ptrdiff_t stride) noexcept {
+    const auto row = static_cast<std::uint64_t>(stride_or_tight(w, format, stride));
+    const auto last_row = static_cast<std::uint64_t>(w) * bytes_per_pixel(format);
+    constexpr auto limit = static_cast<std::uint64_t>(std::numeric_limits<std::ptrdiff_t>::max());
+    return static_cast<std::uint64_t>(h - 1) > (limit - last_row) / row;
+}
+
 } // namespace
 
 std::size_t bytes_per_pixel(PixelFormat format) noexcept {
@@ -837,6 +851,10 @@ Status validate(ImageView src, MutableImageView dst) noexcept {
     }
     if (!stride_valid(src.width, src.format, src.stride_bytes) ||
         !stride_valid(dst.width, dst.format, dst.stride_bytes)) {
+        return Status::invalid_stride;
+    }
+    if (extent_overflows(src.width, src.height, src.format, src.stride_bytes) ||
+        extent_overflows(dst.width, dst.height, dst.format, dst.stride_bytes)) {
         return Status::invalid_stride;
     }
     if (buffers_overlap(src, dst)) {

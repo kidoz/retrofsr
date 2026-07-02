@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -113,6 +114,17 @@ TEST_CASE("validate rejects unsafe inputs", "[validate]") {
         retrofsr::ImageView bad = src;
         bad.stride_bytes = -4;
         REQUIRE(retrofsr::validate(bad, dst) == retrofsr::Status::invalid_stride);
+    }
+
+    SECTION("strides whose total byte extent overflows are rejected") {
+        // Large enough to pass the per-row minimum but wrap (height - 1) * stride.
+        retrofsr::ImageView bad = src;
+        bad.stride_bytes = std::numeric_limits<std::ptrdiff_t>::max();
+        REQUIRE(retrofsr::validate(bad, dst) == retrofsr::Status::invalid_stride);
+
+        retrofsr::MutableImageView bad_dst = dst;
+        bad_dst.stride_bytes = std::numeric_limits<std::ptrdiff_t>::max() / 4;
+        REQUIRE(retrofsr::validate(src, bad_dst) == retrofsr::Status::invalid_stride);
     }
 
     SECTION("identical buffers are rejected") {
