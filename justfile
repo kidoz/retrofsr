@@ -1,8 +1,11 @@
 set shell := ["sh", "-eu", "-c"]
 
 build_dir := env_var_or_default("BUILD_DIR", "buildDir")
-format_files := "include/retrofsr/retrofsr.hpp src/retrofsr.cpp tests/basic.cpp tests/golden.cpp tests/golden_support.hpp tests/gen_golden_data.cpp tests/fixtures.hpp tests/image_quality.cpp examples/scale_ppm.cpp tools/retrofsr_compare.cpp benchmarks/bench.cpp"
-tidy_files := "src/retrofsr.cpp tests/basic.cpp tests/golden.cpp tests/gen_golden_data.cpp tests/image_quality.cpp examples/scale_ppm.cpp tools/retrofsr_compare.cpp benchmarks/bench.cpp"
+# Derived from git so new files cannot silently skip lint. golden_data.hpp is
+# generated (clang-format off); benchmarks/ is excluded from tidy because its
+# compile commands live in the bench build dir, not the default one.
+format_files := `git ls-files '*.cpp' '*.hpp' | grep -v 'tests/golden_data.hpp' | tr '\n' ' '`
+tidy_files := `git ls-files '*.cpp' | grep -v '^benchmarks/' | tr '\n' ' '`
 
 default:
     @just --list
@@ -21,7 +24,10 @@ test: build
     meson test -C "{{build_dir}}"
 
 # Regenerate golden-image expectations after an intentional image-quality change.
-golden: build
+# Builds only the generator: a full build would compile the golden test, whose
+# static_assert fails exactly when the matrix changed and regeneration is needed.
+golden: setup
+    meson compile -C "{{build_dir}}" retrofsr_golden_gen
     ./"{{build_dir}}"/retrofsr_golden_gen > tests/golden_data.hpp
 
 # Image-quality regression suite: golden images plus quality/dither/alpha property tests.
@@ -33,10 +39,17 @@ compare a b *args: build
     ./"{{build_dir}}"/retrofsr_compare "{{a}}" "{{b}}" {{args}}
 
 # Build and run throughput/latency benchmarks for common emulator sizes.
+# Uses a dedicated build dir so -Dbenchmarks=true never sticks to the default one
+# (a stale option there breaks reconfigure against trees that lack the option).
+bench_dir := env_var_or_default("BENCH_DIR", "buildBench")
 bench:
-    meson setup "{{build_dir}}" --reconfigure -Dbenchmarks=true > /dev/null
-    meson compile -C "{{build_dir}}" retrofsr_bench
-    ./"{{build_dir}}"/retrofsr_bench
+    @if [ -d "{{bench_dir}}" ]; then \
+        meson setup "{{bench_dir}}" --reconfigure -Dbenchmarks=true > /dev/null; \
+    else \
+        meson setup "{{bench_dir}}" -Dbenchmarks=true > /dev/null; \
+    fi
+    meson compile -C "{{bench_dir}}" retrofsr_bench
+    ./"{{bench_dir}}"/retrofsr_bench
 
 format:
     clang-format -i {{format_files}}
