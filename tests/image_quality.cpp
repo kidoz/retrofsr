@@ -45,6 +45,17 @@ std::vector<std::byte> shallow_gradient(std::uint32_t w, std::uint32_t h) {
     return src;
 }
 
+std::vector<std::byte> filled_rgba(std::uint32_t w, std::uint32_t h, std::uint8_t r, std::uint8_t g, std::uint8_t b) {
+    std::vector<std::byte> image(static_cast<std::size_t>(w) * h * 4);
+    for (std::size_t i = 0; i < image.size(); i += 4) {
+        image[i + 0] = static_cast<std::byte>(r);
+        image[i + 1] = static_cast<std::byte>(g);
+        image[i + 2] = static_cast<std::byte>(b);
+        image[i + 3] = static_cast<std::byte>(255);
+    }
+    return image;
+}
+
 [[nodiscard]] int red5_from_565(const std::vector<std::byte>& image, std::size_t pixel_index) {
     const auto lo = static_cast<std::uint8_t>(image[pixel_index * 2]);
     const auto hi = static_cast<std::uint8_t>(image[pixel_index * 2 + 1]);
@@ -348,6 +359,118 @@ TEST_CASE("easu handles edge_strength extremes within source bounds", "[quality]
             CAPTURE(i, static_cast<int>(v));
             REQUIRE(v >= 24);
             REQUIRE(v <= 231);
+        }
+    }
+}
+
+TEST_CASE("downscaling is anti-aliased for every widened filter", "[downscale]") {
+    // A checkerboard downscaled 2:1 and 3:1 must converge to its mid-gray mean when the
+    // kernel is widened; point sampling would return only 0 or 255.
+    constexpr std::uint32_t sw = 36;
+    constexpr std::uint32_t sh = 36;
+    const auto src = fixtures::make_rgba(fixtures::Pattern::checkerboard, sw, sh);
+
+    for (const auto filter : {Filter::bilinear, Filter::sharp_bilinear, Filter::catmull_rom, Filter::lanczos3,
+                              Filter::edge_adaptive_lanczos, Filter::easu}) {
+        for (const std::uint32_t dw : {18u, 12u}) {
+            CAPTURE(static_cast<int>(filter), dw);
+
+            Options options{};
+            options.filter = filter;
+            options.color_space = ColorSpace::linear;
+            options.sharpening = 0.0f;
+            const auto out = upscale_to(src, sw, sh, dw, dw, PixelFormat::rgba8, options);
+
+            for (std::size_t i = 0; i < out.size(); ++i) {
+                if (i % 4 == 3) {
+                    continue;
+                }
+                const int v = static_cast<std::uint8_t>(out[i]);
+                CAPTURE(i, v);
+                REQUIRE(v >= 96);
+                REQUIRE(v <= 160);
+            }
+        }
+    }
+
+    // Contrast case: nearest stays point-sampled by design, so it must NOT converge.
+    Options nearest{};
+    nearest.filter = Filter::nearest;
+    nearest.color_space = ColorSpace::linear;
+    nearest.sharpening = 0.0f;
+    const auto aliased = upscale_to(src, sw, sh, 18, 18, PixelFormat::rgba8, nearest);
+    bool any_extreme = false;
+    for (std::size_t i = 0; i < aliased.size(); i += 4) {
+        const int v = static_cast<std::uint8_t>(aliased[i]);
+        if (v < 96 || v > 160) {
+            any_extreme = true;
+            break;
+        }
+    }
+    REQUIRE(any_extreme);
+}
+
+TEST_CASE("flat input stays flat when downscaling", "[downscale]") {
+    const auto src = filled_rgba(32, 24, 180, 90, 45);
+    const std::uint8_t expected[4] = {180, 90, 45, 255};
+
+    for (const auto filter : {Filter::nearest, Filter::bilinear, Filter::sharp_bilinear, Filter::catmull_rom,
+                              Filter::lanczos3, Filter::edge_adaptive_lanczos, Filter::easu}) {
+        for (const auto color_space : {ColorSpace::srgb, ColorSpace::linear, ColorSpace::perceptual}) {
+            CAPTURE(static_cast<int>(filter), static_cast<int>(color_space));
+
+            Options options{};
+            options.filter = filter;
+            options.color_space = color_space;
+            options.sharpening = 0.20f;
+            const auto out = upscale_to(src, 32, 24, 13, 9, PixelFormat::rgba8, options);
+
+            for (std::size_t i = 0; i < out.size(); ++i) {
+                const int diff = std::abs(static_cast<int>(static_cast<std::uint8_t>(out[i])) - expected[i % 4]);
+                CAPTURE(i);
+                REQUIRE(diff <= 1);
+            }
+        }
+    }
+}
+
+TEST_CASE("mixed-axis resize keeps hard edges monotonic", "[downscale][easu]") {
+    // Vertical black|white edge; x upscales 2.5x while y downscales 2x.
+    constexpr std::uint32_t sw = 16;
+    constexpr std::uint32_t sh = 40;
+    constexpr std::uint32_t dw = 40;
+    constexpr std::uint32_t dh = 20;
+    std::vector<std::byte> src(static_cast<std::size_t>(sw) * sh * 4);
+    for (std::uint32_t y = 0; y < sh; ++y) {
+        for (std::uint32_t x = 0; x < sw; ++x) {
+            const std::size_t i = (static_cast<std::size_t>(y) * sw + x) * 4;
+            const std::uint8_t v = x < sw / 2 ? 0 : 255;
+            src[i + 0] = static_cast<std::byte>(v);
+            src[i + 1] = static_cast<std::byte>(v);
+            src[i + 2] = static_cast<std::byte>(v);
+            src[i + 3] = static_cast<std::byte>(255);
+        }
+    }
+
+    // Only filters with monotone step responses: easu (anti-ring clamped) and bilinear
+    // (non-negative weights). lanczos3 rings at step edges by design and is excluded.
+    for (const auto filter : {Filter::easu, Filter::bilinear}) {
+        CAPTURE(static_cast<int>(filter));
+        Options options{};
+        options.filter = filter;
+        options.color_space = ColorSpace::linear;
+        options.sharpening = 0.0f;
+        const auto out = upscale_to(src, sw, sh, dw, dh, PixelFormat::rgba8, options);
+
+        // Allow one code point of wiggle for quantization.
+        for (std::uint32_t y = 0; y < dh; ++y) {
+            int prev = -2;
+            for (std::uint32_t x = 0; x < dw; ++x) {
+                const int v = static_cast<std::uint8_t>(out[(static_cast<std::size_t>(y) * dw + x) * 4]);
+                CAPTURE(y, x, prev, v);
+                REQUIRE(v >= prev - 1);
+                prev = v;
+            }
         }
     }
 }
