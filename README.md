@@ -130,6 +130,22 @@ With [`just`](https://github.com/casey/just) installed:
 - `just compare a.ppm b.ppm --min-psnr 40 --min-ssim 0.98` — MSE/PSNR/SSIM between two PPM images with optional pass/fail thresholds (`retrofsr_compare`).
 - `just bench` — throughput and latency per filter for 256x240, 320x240, 640x480, 1280x720, and 1920x1080 sources at 2x upscale (`retrofsr_bench`).
 
+## Downscaling
+
+`upscale()` also downscales, and does it with proper anti-aliasing: the filter kernel is
+widened per axis by the minification factor (the same approach as stb_image_resize,
+Pillow, and MATLAB `imresize`), so shrinking a checkerboard converges to its mean
+instead of shimmering. Mixed-axis resizes (one axis up, one down) are handled per axis.
+
+Caveats:
+
+- `Filter::nearest` stays point-sampled and will alias — by design, for exact pixel drops.
+- `Filter::sharp_bilinear` behaves as plain (widened) bilinear when an axis downscales.
+- `Filter::easu` switches to a widened isotropic kernel with its anti-ringing clamp;
+  the edge-directed logic only applies when upscaling.
+- Widened support is capped at 8 source texels per axis; for minification beyond ~4:1,
+  pre-reduce in steps.
+
 ## Notes for emulators
 
 For exact integer scaling, `Filter::nearest` is fastest and sharpest. For fractional window sizes such as 256x240 to 1280x720, `retro_pixel_options()` often looks better than naive bilinear because it keeps most texel interiors crisp and blends only near uneven boundaries.
