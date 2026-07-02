@@ -51,7 +51,8 @@ inline constexpr std::array patterns = {
                 r = g = b = ((x ^ y) & 1u) ? 255 : 0;
                 break;
             case Pattern::transparency:
-                // Opaque warm color fading to fully transparent on the left quarter.
+                // Warm color under an alpha ramp, with a hard fully-transparent cut on the
+                // left quarter (the jump exercises the near-zero-alpha unpremultiply path).
                 r = 220;
                 g = 60;
                 b = 40;

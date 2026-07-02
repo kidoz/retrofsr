@@ -151,7 +151,9 @@ TEST_CASE("alpha-aware sharpening keeps premultiplied output valid", "[alpha]") 
             for (std::size_t ch = 0; ch < 3; ++ch) {
                 const int v = static_cast<std::uint8_t>(aware[p + ch]);
                 CAPTURE(p, ch, v, alpha);
-                REQUIRE(v <= alpha + 2);
+                // The invariant holds exactly: filtering weights RGB and alpha identically,
+                // the alpha-aware cap clamps in float, and quantization is monotonic.
+                REQUIRE(v <= alpha);
             }
         }
 
@@ -190,7 +192,9 @@ TEST_CASE("straight-alpha sharpening does not leak hidden background color", "[a
         const int green = static_cast<std::uint8_t>(out[p + 1]);
         const int alpha = static_cast<std::uint8_t>(out[p + 3]);
         CAPTURE(p, green, alpha);
-        REQUIRE(green <= 8);
+        // Green energy is exactly zero after internal premultiplication; allow one
+        // quantization step of paranoia only.
+        REQUIRE(green <= 1);
         if (alpha == 0) {
             REQUIRE(static_cast<std::uint8_t>(out[p + 0]) == 0);
             REQUIRE(static_cast<std::uint8_t>(out[p + 2]) == 0);
@@ -238,6 +242,112 @@ TEST_CASE("easu reconstructs hard axis-aligned edges monotonically", "[quality][
                 REQUIRE(v >= prev);
                 prev = v;
             }
+        }
+    }
+}
+
+TEST_CASE("gray8 output supports deterministic ordered dithering", "[dither][formats]") {
+    const auto src = shallow_gradient(64, 8);
+
+    Options options{};
+    options.filter = Filter::bilinear;
+    options.color_space = ColorSpace::linear;
+    options.sharpening = 0.0f;
+
+    const auto plain_a = upscale_to(src, 64, 8, 128, 16, PixelFormat::gray8, options);
+    const auto plain_b = upscale_to(src, 64, 8, 128, 16, PixelFormat::gray8, options);
+    REQUIRE(plain_a == plain_b);
+
+    options.dither = Dither::ordered;
+    const auto dithered_a = upscale_to(src, 64, 8, 128, 16, PixelFormat::gray8, options);
+    const auto dithered_b = upscale_to(src, 64, 8, 128, 16, PixelFormat::gray8, options);
+    REQUIRE(dithered_a == dithered_b);
+    REQUIRE(dithered_a != plain_a);
+}
+
+TEST_CASE("every pixel format upscales end-to-end", "[formats]") {
+    constexpr PixelFormat formats[] = {
+        PixelFormat::rgba8,  PixelFormat::bgra8,  PixelFormat::argb8, PixelFormat::abgr8,
+        PixelFormat::xrgb8,  PixelFormat::xbgr8,  PixelFormat::rgbx8, PixelFormat::bgrx8,
+        PixelFormat::rgb565, PixelFormat::bgr565, PixelFormat::gray8,
+    };
+    constexpr std::uint32_t sw = 8;
+    constexpr std::uint32_t sh = 6;
+    constexpr std::uint32_t dw = 19;
+    constexpr std::uint32_t dh = 13;
+
+    for (const auto format : formats) {
+        CAPTURE(static_cast<int>(format));
+        const std::size_t bpp = retrofsr::bytes_per_pixel(format);
+        std::vector<std::byte> src(static_cast<std::size_t>(sw) * sh * bpp);
+        for (std::size_t i = 0; i < src.size(); ++i) {
+            src[i] = static_cast<std::byte>((i * 31 + 7) & 0xff);
+        }
+        std::vector<std::byte> dst(static_cast<std::size_t>(dw) * dh * bpp);
+
+        const retrofsr::ImageView src_view{src.data(), sw, sh, 0, format};
+        const retrofsr::MutableImageView dst_view{dst.data(), dw, dh, 0, format};
+        Options options{};
+        options.filter = Filter::easu;
+        options.thread_count = 1;
+        REQUIRE(retrofsr::upscale(src_view, dst_view, options) == retrofsr::Status::ok);
+
+        bool any_nonzero = false;
+        for (const std::byte b : dst) {
+            if (static_cast<std::uint8_t>(b) != 0) {
+                any_nonzero = true;
+                break;
+            }
+        }
+        REQUIRE(any_nonzero);
+    }
+}
+
+TEST_CASE("multithreaded upscaling matches single-threaded output exactly", "[threads]") {
+    // dst height must be >= 32 or parallel_rows short-circuits to a single thread.
+    const auto src = fixtures::make_rgba(fixtures::Pattern::edges, 24, 40);
+
+    for (const auto sharpen : {Sharpen::contrast_adaptive, Sharpen::robust_contrast_adaptive}) {
+        CAPTURE(static_cast<int>(sharpen));
+        Options options{};
+        options.filter = Filter::easu;
+        options.sharpen = sharpen;
+        options.sharpening = 0.30f;
+
+        options.thread_count = 1;
+        const auto single = upscale_to(src, 24, 40, 64, 96, PixelFormat::rgba8, options);
+        options.thread_count = 4;
+        const auto four = upscale_to(src, 24, 40, 64, 96, PixelFormat::rgba8, options);
+        options.thread_count = 0;
+        const auto automatic = upscale_to(src, 24, 40, 64, 96, PixelFormat::rgba8, options);
+
+        REQUIRE(single == four);
+        REQUIRE(single == automatic);
+    }
+}
+
+TEST_CASE("easu handles edge_strength extremes within source bounds", "[quality][easu]") {
+    const auto src = fixtures::make_rgba(fixtures::Pattern::edges, 16, 12);
+
+    for (const float edge_strength : {0.0f, 4.0f}) {
+        CAPTURE(edge_strength);
+        Options options{};
+        options.filter = Filter::easu;
+        options.color_space = ColorSpace::linear;
+        options.sharpening = 0.0f;
+        options.edge_strength = edge_strength;
+        const auto out = upscale_to(src, 16, 12, 41, 29, PixelFormat::rgba8, options);
+
+        // The edges fixture only contains 25 and 230; anti-ringing must hold at both
+        // an isotropic (0) and an over-range (4) edge strength.
+        for (std::size_t i = 0; i < out.size(); ++i) {
+            if (i % 4 == 3) {
+                continue;
+            }
+            const auto v = static_cast<std::uint8_t>(out[i]);
+            CAPTURE(i, static_cast<int>(v));
+            REQUIRE(v >= 24);
+            REQUIRE(v <= 231);
         }
     }
 }

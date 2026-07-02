@@ -81,9 +81,11 @@ TEST_CASE("upscale matches golden images for all filters and color spaces", "[go
 
         int worst_diff = 0;
         std::size_t worst_index = 0;
+        std::size_t total_diff = 0;
         for (std::size_t i = 0; i < out.size(); ++i) {
             const int diff = std::abs(static_cast<int>(static_cast<std::uint8_t>(out[i])) -
                                       static_cast<int>(golden::expected[case_index][i]));
+            total_diff += static_cast<std::size_t>(diff);
             if (diff > worst_diff) {
                 worst_diff = diff;
                 worst_index = i;
@@ -91,6 +93,11 @@ TEST_CASE("upscale matches golden images for all filters and color spaces", "[go
         }
         CAPTURE(worst_index);
         REQUIRE(worst_diff <= golden_tolerance);
+        // Libm scatter is a handful of isolated +/-1s; a systematic shift of every byte
+        // (a real image change) fails this even when it sneaks under the per-byte bound.
+        const double mean_diff = static_cast<double>(total_diff) / static_cast<double>(out.size());
+        CAPTURE(mean_diff);
+        REQUIRE(mean_diff <= 0.25);
     }
 }
 
