@@ -44,7 +44,10 @@ std::uint32_t parse_dimension(const char* text, const char* what) {
     const char* const end = text + std::string_view{text}.size();
     std::uint64_t value = 0;
     const auto [ptr, ec] = std::from_chars(text, end, value);
-    if (ec != std::errc{} || ptr != end || value == 0 || value > std::numeric_limits<std::uint32_t>::max()) {
+    // Cap at the library's documented dimension limit (INT32_MAX) here, before any
+    // buffer is allocated: an absurd size must fail fast, not thrash the allocator.
+    constexpr std::uint64_t max_dimension = std::numeric_limits<std::int32_t>::max();
+    if (ec != std::errc{} || ptr != end || value == 0 || value > max_dimension) {
         throw std::runtime_error(std::string("invalid ") + what + ": " + text);
     }
     return static_cast<std::uint32_t>(value);
