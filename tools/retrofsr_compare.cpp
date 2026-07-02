@@ -167,10 +167,12 @@ int main(int argc, char** argv) {
         double min_ssim = -1.0;
         for (int i = 3; i < argc; ++i) {
             const std::string_view arg = argv[i];
-            if (arg == "--min-psnr" && i + 1 < argc) {
-                min_psnr = parse_double(argv[++i], "--min-psnr");
-            } else if (arg == "--min-ssim" && i + 1 < argc) {
-                min_ssim = parse_double(argv[++i], "--min-ssim");
+            if (arg == "--min-psnr" || arg == "--min-ssim") {
+                if (i + 1 >= argc) {
+                    throw std::runtime_error("missing value for " + std::string(arg));
+                }
+                const bool is_psnr = arg == "--min-psnr";
+                (is_psnr ? min_psnr : min_ssim) = parse_double(argv[++i], is_psnr ? "--min-psnr" : "--min-ssim");
             } else {
                 throw std::runtime_error("unknown argument: " + std::string(arg));
             }
@@ -179,9 +181,10 @@ int main(int argc, char** argv) {
         const RgbImage a = read_ppm(argv[1]);
         const RgbImage b = read_ppm(argv[2]);
         if (a.width != b.width || a.height != b.height) {
+            // Input-shape problems are harness errors (2), not quality regressions (1).
             std::cerr << "retrofsr_compare: size mismatch " << a.width << 'x' << a.height << " vs " << b.width << 'x'
                       << b.height << '\n';
-            return 1;
+            return 2;
         }
 
         const double mse = mean_squared_error(a, b);
