@@ -71,7 +71,11 @@ if get_option('tests')
     dependencies: [retrofsr_dep, catch2_dep],
     install: false,
   )
-  test('basic', test_exe)
+  test(
+    'basic',
+    test_exe,
+    env: ['RETROFSR_TEST_DATA=' + meson.project_source_root() / 'tests' / 'data'],
+  )
 
   executable(
     'retrofsr_golden_gen',

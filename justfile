@@ -1,10 +1,9 @@
 set shell := ["sh", "-eu", "-c"]
 
 build_dir := env_var_or_default("BUILD_DIR", "buildDir")
-# Derived from git so new files cannot silently skip lint. golden_data.hpp is
-# generated (clang-format off); benchmarks/ is excluded from tidy because its
-# compile commands live in the bench build dir, not the default one.
-format_files := `git ls-files '*.cpp' '*.hpp' | grep -v 'tests/golden_data.hpp' | tr '\n' ' '`
+# Derived from git so new files cannot silently skip lint. benchmarks/ is excluded
+# from tidy because its compile commands live in the bench build dir, not the default one.
+format_files := `git ls-files '*.cpp' '*.hpp' | tr '\n' ' '`
 tidy_files := `git ls-files '*.cpp' | grep -v '^benchmarks/' | tr '\n' ' '`
 
 default:
@@ -23,12 +22,11 @@ build: setup
 test: build
     meson test -C "{{build_dir}}"
 
-# Regenerate golden-image expectations after an intentional image-quality change.
-# Builds only the generator: a full build would compile the golden test, whose
-# static_assert fails exactly when the matrix changed and regeneration is needed.
+# Regenerate the on-disk golden images (tests/data/golden) after an intentional
+# image-quality change; review the diffs before committing. Builds only the generator.
 golden: setup
     meson compile -C "{{build_dir}}" retrofsr_golden_gen
-    ./"{{build_dir}}"/retrofsr_golden_gen > tests/golden_data.hpp
+    ./"{{build_dir}}"/retrofsr_golden_gen tests/data/golden
 
 # Image-quality regression suite: golden images plus quality/dither/alpha property tests.
 quality: build

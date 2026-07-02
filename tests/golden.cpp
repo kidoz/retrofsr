@@ -1,4 +1,3 @@
-#include "golden_data.hpp"
 #include "golden_support.hpp"
 
 #include <retrofsr/retrofsr.hpp>
@@ -8,14 +7,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
+#include <set>
+#include <string>
 #include <vector>
 
 namespace {
 
 // Absorbs libm/rounding differences between toolchains without hiding real image changes.
 constexpr int golden_tolerance = 2;
-
-static_assert(golden::configs.size() == golden::expected.size(), "regenerate tests/golden_data.hpp: just golden");
 
 using retrofsr::ColorSpace;
 using retrofsr::Extent;
@@ -69,22 +69,41 @@ std::vector<std::byte> filled_rgba(std::uint32_t w, std::uint32_t h, std::uint8_
 
 } // namespace
 
-TEST_CASE("upscale matches golden images for all filters and color spaces", "[golden]") {
-    const auto src = golden::make_source();
-    for (std::size_t case_index = 0; case_index < golden::configs.size(); ++case_index) {
-        const auto& config = golden::configs[case_index];
-        CAPTURE(case_index, static_cast<int>(config.filter), static_cast<int>(config.color_space),
-                static_cast<int>(config.sharpen));
+TEST_CASE("renders match the on-disk golden images", "[golden]") {
+    const std::string dir = golden::golden_dir();
 
-        const auto out = golden::render(config, src);
-        REQUIRE(out.size() == golden::expected[case_index].size());
+    // Case names must be unique (they double as file stems).
+    std::set<std::string> names;
+    for (const auto& config : golden::configs) {
+        REQUIRE(names.insert(golden::case_name(config)).second);
+    }
+
+    // The committed manifest must list exactly the configured cases; a mismatch means
+    // the matrix changed without regeneration (fix with: just golden).
+    std::ifstream manifest(dir + "/manifest.txt");
+    REQUIRE(manifest.good());
+    std::size_t listed = 0;
+    for (std::string line; std::getline(manifest, line);) {
+        if (!line.empty() && line[0] != '#') {
+            ++listed;
+        }
+    }
+    REQUIRE(listed == golden::configs.size());
+
+    for (const auto& config : golden::configs) {
+        const std::string name = golden::case_name(config);
+        CAPTURE(name);
+
+        const auto out = golden::render(config);
+        const auto expected = golden::load_golden(dir + "/" + golden::golden_file_name(config), config);
+        REQUIRE(out.size() == expected.size());
 
         int worst_diff = 0;
         std::size_t worst_index = 0;
         std::size_t total_diff = 0;
         for (std::size_t i = 0; i < out.size(); ++i) {
             const int diff = std::abs(static_cast<int>(static_cast<std::uint8_t>(out[i])) -
-                                      static_cast<int>(golden::expected[case_index][i]));
+                                      static_cast<int>(static_cast<std::uint8_t>(expected[i])));
             total_diff += static_cast<std::size_t>(diff);
             if (diff > worst_diff) {
                 worst_diff = diff;
