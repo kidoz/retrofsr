@@ -28,6 +28,10 @@ retrofsr_lib = library(
   'src/retrofsr.cpp',
   include_directories: retrofsr_inc,
   cpp_args: retrofsr_args,
+  # Pre-1.0 ABI is unstable (Options grows fields across minors); track soversion to
+  # the minor so stale binaries fail to load instead of misreading Options.
+  version: meson.project_version(),
+  soversion: '0.4',
   install: true,
 )
 
