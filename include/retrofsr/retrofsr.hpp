@@ -74,6 +74,8 @@ enum class AlphaMode : std::uint8_t {
     /// Ignore input alpha and write fully opaque alpha where the destination format has alpha.
     ignore,
     /// Input/output RGB are straight-alpha; filtering is internally premultiplied to avoid fringes.
+    /// When the destination format has no alpha channel, the premultiplied result is written
+    /// as-is, i.e. the image is composited over black.
     straight,
     /// Input/output RGB are already premultiplied.
     premultiplied,
@@ -262,10 +264,14 @@ enum class Status : std::uint8_t {
 
 /// Upscale src into dst. Source and destination memory must not overlap.
 ///
-/// When sharpening is enabled the function allocates a temporary floating-point image of
-/// dst.width * dst.height pixels; with sharpening disabled it samples directly into dst
-/// and only allocates a small per-column coordinate table. It may throw std::bad_alloc if
-/// allocation fails. All argument errors are returned as Status.
+/// With sharpening enabled the function allocates a floating-point image of
+/// dst.width * dst.height pixels and the sharpening pass copies it, so peak temporary
+/// memory is about 2 * width * height * 16 bytes; with sharpening disabled it samples
+/// directly into dst and only allocates a small per-column coordinate table.
+///
+/// All argument errors are returned as Status. Allocation and threading failures
+/// propagate as exceptions: std::bad_alloc or std::length_error from allocation, and
+/// std::system_error if worker threads cannot be created.
 [[nodiscard]] Status upscale(ImageView src, MutableImageView dst, Options options = {});
 
 } // namespace retrofsr
