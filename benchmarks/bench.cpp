@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <string_view>
 #include <vector>
 
@@ -103,12 +104,13 @@ int main(int argc, char** argv) {
             if (warmup_ms < 0.0) {
                 return 1;
             }
-            // Aim for roughly half a second per case, bounded to keep the suite fast.
-            int iterations = warmup_ms > 0.0 ? static_cast<int>(500.0 / warmup_ms) : 30;
-            iterations = iterations < 3 ? 3 : (iterations > 30 ? 30 : iterations);
+            // Aim for roughly half a second per case; the cap keeps pathological
+            // estimates bounded while still giving fast cases enough samples.
+            int iterations = warmup_ms > 0.0 ? static_cast<int>(500.0 / warmup_ms) : 200;
+            iterations = iterations < 3 ? 3 : (iterations > 200 ? 200 : iterations);
 
             double total_ms = 0.0;
-            double min_ms = warmup_ms;
+            double min_ms = std::numeric_limits<double>::infinity();
             for (int i = 0; i < iterations; ++i) {
                 const double ms = run_once(src, s, dst, options);
                 if (ms < 0.0) {
