@@ -4,6 +4,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -64,6 +65,84 @@ std::vector<std::byte> filled_rgba(std::uint32_t w, std::uint32_t h, std::uint8_
 }
 
 } // namespace
+
+TEST_CASE("sharpened output respects padded rows and narrow image borders", "[sharpen][stride]") {
+    const auto src = shallow_gradient(8, 7);
+    for (const auto sharpen : {Sharpen::contrast_adaptive, Sharpen::robust_contrast_adaptive}) {
+        for (const auto format : {PixelFormat::rgba8, PixelFormat::bgra8, PixelFormat::argb8, PixelFormat::abgr8,
+                                  PixelFormat::xrgb8, PixelFormat::xbgr8, PixelFormat::rgbx8, PixelFormat::bgrx8,
+                                  PixelFormat::rgb565, PixelFormat::bgr565, PixelFormat::gray8}) {
+            for (const auto [dw, dh] : {std::pair{1u, 1u},
+                                        {1u, 35u},
+                                        {2u, 35u},
+                                        {35u, 1u},
+                                        {13u, 37u},
+                                        {63u, 35u},
+                                        {64u, 35u},
+                                        {65u, 35u},
+                                        {127u, 35u},
+                                        {128u, 35u},
+                                        {129u, 37u}}) {
+                CAPTURE(static_cast<int>(sharpen), static_cast<int>(format), dw, dh);
+                Options options = retrofsr::fsr1_style_options();
+                options.sharpen = sharpen;
+                options.sharpening = 0.7f;
+                options.dither = Dither::ordered;
+                options.thread_count = 1;
+                const auto packed = upscale_to(src, 8, 7, dw, dh, format, options);
+
+                const std::size_t row_bytes = dw * retrofsr::bytes_per_pixel(format);
+                const std::size_t stride = row_bytes + 7;
+                constexpr std::size_t guard = 19;
+                constexpr std::byte sentinel{0xa5};
+                std::vector<std::byte> padded(guard + stride * dh + guard, sentinel);
+                const retrofsr::ImageView src_view{src.data(), 8, 7, 0, PixelFormat::rgba8};
+                const retrofsr::MutableImageView dst_view{padded.data() + guard, dw, dh,
+                                                          static_cast<std::ptrdiff_t>(stride), format};
+                options.thread_count = 4;
+                REQUIRE(retrofsr::upscale(src_view, dst_view, options) == retrofsr::Status::ok);
+
+                // Compare the entire allocation, including untouched row padding and guards.
+                std::vector<std::byte> expected(padded.size(), sentinel);
+                for (std::uint32_t y = 0; y < dh; ++y) {
+                    std::copy_n(packed.data() + y * row_bytes, row_bytes, expected.data() + guard + y * stride);
+                }
+                REQUIRE(padded == expected);
+            }
+        }
+    }
+}
+
+TEST_CASE("CAS preserves an affine ramp across block boundaries", "[sharpen]") {
+    constexpr std::uint32_t width = 129;
+    constexpr std::uint32_t height = 35;
+    auto src = filled_rgba(width, height, 0, 0, 0);
+    for (std::uint32_t y = 0; y < height; ++y) {
+        for (std::uint32_t x = 0; x < width; ++x) {
+            const auto i = (static_cast<std::size_t>(y) * width + x) * 4;
+            src[i] = static_cast<std::byte>(x + 7);
+            src[i + 1] = static_cast<std::byte>(255 - x);
+            src[i + 2] = static_cast<std::byte>(y * 5);
+        }
+    }
+    Options options{};
+    options.filter = Filter::nearest;
+    options.color_space = ColorSpace::linear;
+    options.sharpen = Sharpen::contrast_adaptive;
+    options.sharpening = 1.0f;
+    options.thread_count = 4;
+    const auto out = upscale_to(src, width, height, width, height, PixelFormat::rgba8, options);
+    // An affine field has no interior detail to sharpen. Exclude clamped image borders.
+    for (std::uint32_t y = 1; y + 1 < height; ++y) {
+        for (std::uint32_t x = 1; x + 1 < width; ++x) {
+            CAPTURE(x, y);
+            const auto i = (static_cast<std::size_t>(y) * width + x) * 4;
+            for (std::size_t channel = 0; channel < 4; ++channel) {
+                REQUIRE(out[i + channel] == src[i + channel]);
+            }
+        }
+    }
+}
 
 TEST_CASE("ordered dithering is deterministic and disabled by default", "[dither]") {
     const auto src = shallow_gradient(64, 8);
