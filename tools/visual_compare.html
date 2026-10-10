@@ -24,9 +24,9 @@ body{font:15px system-ui,sans-serif;background:#131820;color:#e7edf4;margin:24px
 <script id="data" type="application/json">__MANIFEST__</script>
 <script type="module">
 const data=JSON.parse(document.querySelector('#data').textContent), $=s=>document.querySelector(s);
-const names=['Baseline · EASU + RCAS','Noise suppression','Edge coherence','Both controls'];
+const names=['Baseline · EASU + RCAS','Noise suppression','Edge coherence','Both controls','Nearest · no sharpening'];
 let playing=false,last=0,request=0,cache=new Map();
-$('#scope').textContent=`${data.kind==='synthetic'?'SYNTHETIC SCENES — this is not real-emulator validation.':'CAPTURE FRAMES — no high-resolution ground truth is supplied.'} Scale ${data.scale}×; perceptual RGB; sharpening ${data.sharpening}; playback ${data.fps} fps. All controls remain experimental.`;
+$('#scope').textContent=`${data.kind==='synthetic'?'SYNTHETIC SCENES — this is not real-emulator validation.':'CAPTURE FRAMES — no high-resolution ground truth is supplied.'} Scale ${data.scale}×; FSR variants: perceptual RGB, sharpening ${data.sharpening}; nearest: no sharpening; playback ${data.fps} fps. All controls remain experimental.`;
 data.sequences.forEach((s,i)=>{let o=document.createElement('option');o.value=i;o.textContent=s.name;$('#scene').append(o)});
 function image(path){if(!cache.has(path))cache.set(path,new Promise((resolve,reject)=>{let im=new Image();im.onload=()=>resolve(im);im.onerror=()=>reject(Error('Cannot load '+path));im.src=path}));return cache.get(path)}
 async function draw(){

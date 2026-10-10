@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a lossless, offline four-way spatial-filter review from P6 frames or synthetic scenes.
+"""Build a lossless, offline five-way spatial-filter review from P6 frames or synthetic scenes.
 
 Python standard library only. Run --help for capture and reproduction options.
 """
@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import NotRequired, TypedDict
 
-MODES = ("fsr1", "fsr1-noise", "fsr1-coherence", "fsr1-both")
+MODES = ("fsr1", "fsr1-noise", "fsr1-coherence", "fsr1-both", "nearest")
 SCENES = ("diagonal", "thin-line", "checkerboard", "hud", "noise", "pixel-art")
 GLYPH = ("10101110111", "10100100100", "11100100110", "10100100100", "10101110111")
 
@@ -109,7 +109,7 @@ def write_png(path: Path, width: int, height: int, raster: bytes) -> None:
 
 
 def write_animation(path: Path, width: int, height: int, frames: list[bytes], fps: float) -> None:
-    """Lossless APNG with one shared clock for all four panels."""
+    """Lossless APNG with one shared clock for all five panels."""
 
     def chunk(kind: bytes, payload: bytes) -> bytes:
         return (
@@ -138,10 +138,14 @@ def write_animation(path: Path, width: int, height: int, frames: list[bytes], fp
 
 def contact_sheet(frames: list[bytes], width: int, height: int) -> bytes:
     result = bytearray()
-    for left, right in ((0, 1), (2, 3)):
+    padded = [*frames]
+    if len(padded) % 2:
+        padded.append(bytes(width * height * 3))
+    for left in range(0, len(padded), 2):
+        right = left + 1
         for y in range(height):
             start, end = y * width * 3, (y + 1) * width * 3
-            result += frames[left][start:end] + frames[right][start:end]
+            result += padded[left][start:end] + padded[right][start:end]
     return bytes(result)
 
 
@@ -152,14 +156,14 @@ def write_static_report(output: Path, reports: list[ReviewSequence], kind: str, 
         frame = min(3, len(report["frames"]) - 1)
         sections.append(
             f"<section><h2>{html.escape(report['name'])}</h2>"
-            "<p>Top: baseline / noise suppression. Bottom: edge coherence / both.</p>"
-            f'<img src="{folder}/preview.png" alt="Four-way still comparison, frame {frame + 1}">'
+            "<p>Top: baseline / noise suppression. Middle: edge coherence / both. Bottom: nearest / blank.</p>"
+            f'<img src="{folder}/preview.png" alt="Five-way still comparison, frame {frame + 1}">'
             f'<p><a href="{folder}/motion.png">Open synchronized lossless animation</a> · '
             f'<a href="{folder}/{frame:04d}-reference.png">Analytic reference</a></p></section>'
             if kind == "synthetic"
             else f"<section><h2>{html.escape(report['name'])}</h2>"
-            "<p>Top: baseline / noise suppression. Bottom: edge coherence / both.</p>"
-            f'<img src="{folder}/preview.png" alt="Four-way still comparison">'
+            "<p>Top: baseline / noise suppression. Middle: edge coherence / both. Bottom: nearest / blank.</p>"
+            f'<img src="{folder}/preview.png" alt="Five-way still comparison">'
             f'<p><a href="{folder}/motion.png">Open synchronized lossless animation</a></p></section>'
         )
     output.joinpath("static.html").write_text(
@@ -168,7 +172,7 @@ def write_static_report(output: Path, reports: list[ReviewSequence], kind: str, 
         "img{image-rendering:pixelated;width:768px;max-width:100%}section{margin:40px 0}</style>"
         f"<h1>retrofsr · {html.escape(kind)} comparisons at {scale}×</h1>"
         "<p>Lossless stills and synchronized APNG playback. No JavaScript required.</p>"
-        "<p>Synthetic scenes do not establish quality on real emulator captures. Neither option is promoted.</p>"
+        "<p>Nearest is an unsharpened pixel-art reference. Neither experimental option is promoted.</p>"
         '<a href="index.html">Interactive frame and difference inspector</a>' + "".join(sections) + "</html>"
     )
 
@@ -255,6 +259,13 @@ def build_report(args: argparse.Namespace) -> None:
         "modes": MODES,
         "color_space": "perceptual",
         "sharpening": 0.20,
+        "mode_options": {
+            mode: {
+                "color_space": "srgb" if mode == "nearest" else "perceptual",
+                "sharpening": 0.0 if mode == "nearest" else 0.20,
+            }
+            for mode in MODES
+        },
         "scaler_sha256": hashlib.sha256(tool.read_bytes()).hexdigest(),
         "sequences": reports,
     }
@@ -350,11 +361,15 @@ def build_report(args: argparse.Namespace) -> None:
         write_png(
             folder / "preview.png",
             sequence["width"] * 2,
-            sequence["height"] * 2,
+            sequence["height"] * ((len(MODES) + 1) // 2),
             contacts[min(3, len(contacts) - 1)],
         )
         write_animation(
-            folder / "motion.png", sequence["width"] * 2, sequence["height"] * 2, contacts, args.fps
+            folder / "motion.png",
+            sequence["width"] * 2,
+            sequence["height"] * ((len(MODES) + 1) // 2),
+            contacts,
+            args.fps,
         )
         reports.append(sequence)
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

@@ -198,8 +198,10 @@ This library is not bit-equivalent to AMD FidelityFX Super Resolution 1.0. It fo
 
 Generate a new, reproducible report with lossless PNGs, synchronized APNG motion,
 frame stepping, and amplified difference views. The script uses only the Python
-standard library. All four variants use the same perceptual EASU + RCAS preset
-and sharpening 0.20; only the two experimental controls vary.
+standard library. The four FSR variants use the same perceptual EASU + RCAS
+preset and sharpening 0.20; only the two experimental controls vary. A fifth,
+unsharpened nearest-neighbor panel provides a pixel-art reference. Contact sheets
+show baseline/noise, coherence/both, then nearest/blank across three rows.
 
 ```sh
 just visual-review buildVisualReview/example --synthetic --scale 1.5 --frames 16
