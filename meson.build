@@ -122,4 +122,7 @@ if get_option('benchmarks')
     ],
     install: false,
   )
+  if get_option('tests')
+    test('benchmark-cli', uv, args: python_test_args + [files('tests/tools/test_benchmark_cli.py'), benchmark_exe], timeout: 120)
+  endif
 endif
