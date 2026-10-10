@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>retrofsr spatial filter review</title>
+<style>
+body{font:15px system-ui,sans-serif;background:#131820;color:#e7edf4;margin:24px;line-height:1.5}h1{font-size:25px}p{max-width:1050px;color:#bcc9d8}button,select,input{font:inherit}button,select{background:#26374b;color:white;border:1px solid #71849b;border-radius:5px;padding:6px}label{margin-right:20px;display:inline-block}nav{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:20px 0}canvas{image-rendering:pixelated;background:#000;max-width:none}#panels{display:grid;grid-template-columns:repeat(2,max-content);gap:18px;overflow:auto}figure{margin:0}figcaption{font-weight:600;margin:5px 0}table{border-collapse:collapse;font-variant-numeric:tabular-nums;margin-top:20px}th,td{padding:6px 14px;border-bottom:1px solid #3c4859;text-align:right}th:first-child,td:first-child{text-align:left}#status{color:#f6cf77}small{color:#bdc7d6}a{color:#9bd3ff}
+</style>
+<h1>retrofsr · spatial filter review</h1>
+<p><a href="static.html">Open contact sheets and synchronized animations (no JavaScript required)</a></p>
+<p id="scope"></p>
+<p>Inspect diagonals and thin lines for stair-stepping, HUD strokes for softness, and texture for lost detail. Step through the sequence to distinguish reconstruction changes from motion. All panels stay on the same frame. Looping jumps back to the first frame.</p>
+<nav>
+<label>Scene <select id="scene"></select></label>
+<button id="play">Play</button><button id="previous">Previous</button><button id="next">Next</button>
+<label>Frame <input id="frame" type="range" min="0" value="0"><output id="counter"></output></label>
+<label>Zoom <select id="zoom"><option>1</option><option>2</option><option selected>4</option><option>8</option></select>×</label>
+<label><input id="diff" type="checkbox"> Absolute difference ×8 vs baseline</label>
+</nav>
+<noscript>JavaScript is disabled in this browser. Open the PNG files directly or use a browser with scripting enabled.</noscript>
+<p id="status">Loading…</p>
+<div id="panels"></div>
+<table><thead><tr><th>Mode</th><th>Difference MAE</th><th>Max difference</th><th>Reference MAE</th><th>Temporal error Δ</th></tr></thead><tbody id="metrics"></tbody></table>
+<p><small>Metrics use 8-bit RGB code values. Differences from baseline measure change, not quality. Synthetic reference MAE uses independent 4×4 area integration; temporal error Δ measures frame-to-frame changes in reference error, not motion-compensated flicker. Capture reports have no reference scores. No benchmark timings are inferred from this viewer.</small></p>
+<p><a href="manifest.json">Reproduction manifest and per-frame metrics</a></p>
+<script id="data" type="application/json">__MANIFEST__</script>
+<script type="module">
+const data=JSON.parse(document.querySelector('#data').textContent), $=s=>document.querySelector(s);
+const names=['Baseline · EASU + RCAS','Noise suppression','Edge coherence','Both controls'];
+let playing=false,last=0,request=0,cache=new Map();
+$('#scope').textContent=`${data.kind==='synthetic'?'SYNTHETIC SCENES — this is not real-emulator validation.':'CAPTURE FRAMES — no high-resolution ground truth is supplied.'} Scale ${data.scale}×; perceptual RGB; sharpening ${data.sharpening}; playback ${data.fps} fps. All controls remain experimental.`;
+data.sequences.forEach((s,i)=>{let o=document.createElement('option');o.value=i;o.textContent=s.name;$('#scene').append(o)});
+function image(path){if(!cache.has(path))cache.set(path,new Promise((resolve,reject)=>{let im=new Image();im.onload=()=>resolve(im);im.onerror=()=>reject(Error('Cannot load '+path));im.src=path}));return cache.get(path)}
+async function draw(){
+ const ticket=++request,s=data.sequences[Number($('#scene').value)],f=Number($('#frame').value),entry=s.frames[f],zoom=Number($('#zoom').value),diff=$('#diff').checked;
+ $('#frame').max=s.frames.length-1;$('#counter').textContent=` ${f+1}/${s.frames.length}`;$('#status').textContent='Loading frame…';
+ let paths=[...entry[diff?'differences':'outputs'],entry.source],labels=[...names,'Source · displayed at output dimensions (nearest)'];
+ if(entry.reference){paths.push(entry.reference);labels.push('Approximate analytic reference')}
+ try{let images=await Promise.all(paths.map(image));if(ticket!==request)return;$('#panels').replaceChildren();
+ images.forEach((im,i)=>{let fig=document.createElement('figure'),caption=document.createElement('figcaption'),canvas=document.createElement('canvas');caption.textContent=labels[i];canvas.width=s.width;canvas.height=s.height;canvas.style.width=s.width*zoom+'px';canvas.style.height=s.height*zoom+'px';let c=canvas.getContext('2d');c.imageSmoothingEnabled=false;c.drawImage(im,0,0,s.width,s.height);fig.append(caption,canvas);$('#panels').append(fig)});
+ $('#metrics').replaceChildren();data.modes.forEach((mode,i)=>{const m=s.metrics[mode][f],row=document.createElement('tr');[names[i],m.baseline_mae,m.baseline_max,m.reference_mae,m.temporal_error_delta].forEach(v=>{let cell=document.createElement('td');cell.textContent=v===undefined?'—':typeof v==='number'?v.toFixed(3):v;row.append(cell)});$('#metrics').append(row)});
+ $('#status').textContent=`${s.width}×${s.height} output · frame ${f+1}${diff?' · difference amplified 8× (saturated at 255)':''}`;
+ }catch(e){if(ticket===request){playing=false;$('#play').textContent='Play';$('#status').textContent=e.message}}
+}
+function step(delta){let n=data.sequences[Number($('#scene').value)].frames.length;$('#frame').value=(Number($('#frame').value)+delta+n)%n;draw()}
+$('#play').onclick=()=>{playing=!playing;$('#play').textContent=playing?'Pause':'Play';last=performance.now()};
+$('#previous').onclick=()=>step(-1);$('#next').onclick=()=>step(1);
+$('#scene').onchange=()=>{request++;cache.clear();$('#frame').value=0;draw()};
+$('#frame').oninput=draw;$('#zoom').onchange=draw;$('#diff').onchange=draw;
+async function tick(now){if(playing&&now-last>=1000/data.fps){last=now;step(1)}requestAnimationFrame(tick)}
+draw();requestAnimationFrame(tick);
+</script></html>

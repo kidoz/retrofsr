@@ -190,3 +190,34 @@ For exact integer scaling, `Filter::nearest` is fastest and sharpest. For fracti
 For N64, PS1, Saturn 3D, or emulator output that already includes antialiasing or texture filtering, try `fsr_like_options()` and tune `Options::sharpening` between `0.10f` and `0.35f`.
 
 This library is not bit-equivalent to AMD FidelityFX Super Resolution 1.0. It follows the same high-level idea of spatial upscaling plus optional robust sharpening, but uses a simple portable CPU algorithm that is easy to integrate into emulators.
+
+## Visual filter comparison
+
+Generate a new, reproducible report with lossless PNGs, synchronized APNG motion,
+frame stepping, and amplified difference views. The script uses only the Python
+standard library. All four variants use the same perceptual EASU + RCAS preset
+and sharpening 0.20; only the two experimental controls vary.
+
+```sh
+just visual-review buildVisualReview/example --synthetic --scale 1.5 --frames 16
+```
+
+Open `buildVisualReview/example/static.html` for contact sheets and animation
+links, or `index.html` for the JavaScript frame/difference inspector. The static
+report works with scripting disabled. Pixelated zoom preserves individual output
+pixels. Difference maps show absolute RGB differences from baseline, multiplied
+by 8; they are not quality scores. `manifest.json` stores input hashes, tool/source
+hashes, options and per-frame metrics. Existing output directories are rejected.
+
+For real captures, provide equally sized opaque 8-bit P6 PPM frames with
+zero-padded names:
+
+```sh
+just visual-review buildVisualReview/capture --input /path/to/ppm-frames --scale 2 --frames 60 --fps 60
+```
+
+Capture alpha is not supported by PPM. Frame order is lexical, and playback rate
+is explicit (1–60 fps); the tool does not infer video timestamps. Use lossless
+captures and avoid rescaling them before evaluation. Synthetic reports include
+approximate analytic references; capture reports intentionally omit reference
+quality scores. The report is a review aid, not a real-time performance benchmark.

@@ -80,3 +80,6 @@ lint: python-check format-check tidy
 
 check: python-check format-check tidy test
 
+# Produce a new offline report directory. Example: just visual-review buildVisualReview/run1
+visual-review output *args: build
+    uv run --locked python tools/visual_compare.py --tool "{{build_dir}}/scale_ppm" --output "{{output}}" {{args}}

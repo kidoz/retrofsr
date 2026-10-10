@@ -64,6 +64,7 @@ if get_option('examples')
   )
   if get_option('tests')
     test('scale-ppm-cli', uv, args: python_test_args + [files('tests/tools/test_scale_ppm.py'), scale_ppm_exe])
+    test('visual-compare-cli', uv, args: python_test_args + [files('tests/tools/test_visual_compare.py'), scale_ppm_exe], timeout: 120)
   endif
 endif
 
