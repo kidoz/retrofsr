@@ -23,6 +23,7 @@ It provides three practical presets:
 - Anti-aliased downscaling via per-axis kernel widening, including mixed-axis resizes (see [Downscaling](#downscaling)).
 - Opt-in experimental controls: RCAS noise suppression and EASU edge coherence (see [Experimental spatial controls](#experimental-spatial-controls-06)).
 - When sharpening is disabled, upscaling streams directly into the destination without the intermediate float image.
+- With sharpening enabled, one float image is retained while sharpening writes directly to the destination: about 32 MiB of image scratch space for 1920×1080 output, plus a small coordinate table and worker overhead. CAS processes 64-pixel blocks using 1 KiB of stack scratch per worker so its arithmetic can vectorize separately from color encoding.
 
 ## Build
 

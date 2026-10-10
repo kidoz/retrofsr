@@ -281,8 +281,9 @@ enum class Status : std::uint8_t {
 /// a widened isotropic kernel with its anti-ringing clamp.
 ///
 /// With sharpening enabled the function allocates a floating-point image of
-/// dst.width * dst.height pixels and the sharpening pass copies it, so peak temporary
-/// memory is about 2 * width * height * 16 bytes; with sharpening disabled it samples
+/// dst.width * dst.height pixels and sharpens directly into dst, so image scratch
+/// memory is width * height * 16 bytes. CAS additionally uses 1 KiB of stack scratch
+/// per worker. With sharpening disabled it samples
 /// directly into dst and only allocates a small per-column coordinate table.
 ///
 /// All argument errors are returned as Status. Allocation and threading failures

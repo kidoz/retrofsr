@@ -782,7 +782,9 @@ template<typename Fn> void parallel_rows(std::uint32_t height, std::uint32_t req
     return options.alpha_aware_sharpening && options.alpha != AlphaMode::ignore;
 }
 
-void apply_sharpen(std::vector<Color4>& image, std::uint32_t width, std::uint32_t height, const Options& options) {
+template<typename StoreRow>
+void apply_sharpen(const std::vector<Color4>& image, std::uint32_t width, std::uint32_t height, const Options& options,
+                   StoreRow&& store_row) {
     const float sharpening = std::clamp(options.sharpening, 0.0f, 1.0f);
     if (sharpening <= 0.0f || width == 0 || height == 0) {
         return;
@@ -828,28 +830,36 @@ void apply_sharpen(std::vector<Color4>& image, std::uint32_t width, std::uint32_
         return clamp_color(out);
     };
 
-    const std::vector<Color4> src = image;
+    // Separate CAS arithmetic from color encoding in fixed blocks so the
+    // compiler can vectorize it, without another full image or worker allocation.
     parallel_rows(height, thread_count, [&](std::uint32_t y0, std::uint32_t y1) {
+        constexpr std::uint32_t block_size = 64;
+        std::array<Color4, block_size> sharpened;
         for (std::uint32_t y = y0; y < y1; ++y) {
-            Color4* out_row = image.data() + static_cast<std::size_t>(y) * width;
-            const Color4* mid = src.data() + static_cast<std::size_t>(y) * width;
-            const Color4* up = src.data() + static_cast<std::size_t>(y == 0 ? y : y - 1) * width;
-            const Color4* down = src.data() + static_cast<std::size_t>(y + 1 >= height ? y : y + 1) * width;
-
-            // Border columns clamp the horizontal neighbors to the edge texel.
-            out_row[0] = sharpen_one(mid[0], up[0], down[0], mid[0], mid[width > 1 ? 1 : 0]);
-            if (width > 1) {
-                out_row[width - 1] =
-                    sharpen_one(mid[width - 1], up[width - 1], down[width - 1], mid[width - 2], mid[width - 1]);
-            }
-            for (std::uint32_t x = 1; x + 1 < width; ++x) {
-                out_row[x] = sharpen_one(mid[x], up[x], down[x], mid[x - 1], mid[x + 1]);
-            }
+            const Color4* mid = image.data() + static_cast<std::size_t>(y) * width;
+            const Color4* up = image.data() + static_cast<std::size_t>(y == 0 ? y : y - 1) * width;
+            const Color4* down = image.data() + static_cast<std::size_t>(y + 1 >= height ? y : y + 1) * width;
+            store_row(y, [&](std::uint32_t x) {
+                // store_row visits columns in order; fill each block before its first read.
+                const auto offset = x % block_size;
+                if (offset == 0) {
+                    const auto count = std::min(block_size, width - x);
+                    for (std::uint32_t i = 0; i < count; ++i) {
+                        const auto column = x + i;
+                        sharpened[i] =
+                            sharpen_one(mid[column], up[column], down[column], mid[column == 0 ? column : column - 1],
+                                        mid[column + 1 >= width ? column : column + 1]);
+                    }
+                }
+                return sharpened[offset];
+            });
         }
     });
 }
 
-void apply_rcas(std::vector<Color4>& image, std::uint32_t width, std::uint32_t height, const Options& options) {
+template<typename StoreRow>
+void apply_rcas(const std::vector<Color4>& image, std::uint32_t width, std::uint32_t height, const Options& options,
+                StoreRow&& store_row) {
     const float sharpening = std::clamp(options.sharpening, 0.0f, 1.0f);
     if (sharpening <= 0.0f || width == 0 || height == 0) {
         return;
@@ -905,23 +915,16 @@ void apply_rcas(std::vector<Color4>& image, std::uint32_t width, std::uint32_t h
         return clamp_color(out);
     };
 
-    const std::vector<Color4> src = image;
+    // The resampled image stays immutable while each worker sharpens and stores
+    // its own destination rows. No second float image or final store pass is needed.
     parallel_rows(height, thread_count, [&](std::uint32_t y0, std::uint32_t y1) {
         for (std::uint32_t y = y0; y < y1; ++y) {
-            Color4* out_row = image.data() + static_cast<std::size_t>(y) * width;
-            const Color4* mid = src.data() + static_cast<std::size_t>(y) * width;
-            const Color4* up = src.data() + static_cast<std::size_t>(y == 0 ? y : y - 1) * width;
-            const Color4* down = src.data() + static_cast<std::size_t>(y + 1 >= height ? y : y + 1) * width;
-
-            // Border columns clamp the horizontal neighbors to the edge texel.
-            out_row[0] = rcas_one(mid[0], up[0], down[0], mid[0], mid[width > 1 ? 1 : 0]);
-            if (width > 1) {
-                out_row[width - 1] =
-                    rcas_one(mid[width - 1], up[width - 1], down[width - 1], mid[width - 2], mid[width - 1]);
-            }
-            for (std::uint32_t x = 1; x + 1 < width; ++x) {
-                out_row[x] = rcas_one(mid[x], up[x], down[x], mid[x - 1], mid[x + 1]);
-            }
+            const Color4* mid = image.data() + static_cast<std::size_t>(y) * width;
+            const Color4* up = image.data() + static_cast<std::size_t>(y == 0 ? y : y - 1) * width;
+            const Color4* down = image.data() + static_cast<std::size_t>(y + 1 >= height ? y : y + 1) * width;
+            store_row(y, [&](std::uint32_t x) {
+                return rcas_one(mid[x], up[x], down[x], mid[x == 0 ? x : x - 1], mid[x + 1 >= width ? x : x + 1]);
+            });
         }
     });
 }
@@ -1106,17 +1109,10 @@ Status upscale(ImageView src, MutableImageView dst, Options options) {
     });
 
     if (options.sharpen == Sharpen::robust_contrast_adaptive) {
-        apply_rcas(work, dst.width, dst.height, options);
+        apply_rcas(work, dst.width, dst.height, options, store_row);
     } else {
-        apply_sharpen(work, dst.width, dst.height, options);
+        apply_sharpen(work, dst.width, dst.height, options, store_row);
     }
-
-    parallel_rows(dst.height, options.thread_count, [&](std::uint32_t y0, std::uint32_t y1) {
-        for (std::uint32_t y = y0; y < y1; ++y) {
-            const Color4* row = work.data() + static_cast<std::size_t>(y) * dst.width;
-            store_row(y, [&](std::uint32_t x) { return row[x]; });
-        }
-    });
 
     return Status::ok;
 }
