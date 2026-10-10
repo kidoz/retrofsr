@@ -119,6 +119,9 @@ void write_ppm(const std::string& path, const RgbaImage& image) {
         out.put(static_cast<char>(image.rgba[i + 1]));
         out.put(static_cast<char>(image.rgba[i + 2]));
     }
+    if (!out) {
+        throw std::runtime_error("failed to write output file: " + path);
+    }
 }
 
 retrofsr::Options options_from_mode(const std::string& mode) {
