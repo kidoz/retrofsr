@@ -1,6 +1,6 @@
 # retrofsr
 
-`retrofsr` is a tiny C++23 CPU spatial upscaling library intended for emulator frontends and render backends. It is **FSR-1-inspired**, not a bit-equivalent implementation of AMD FSR. The implementation is portable C++ and MIT-licensed; the optional RCAS noise detector adapts AMD code with attribution in [LICENSE](LICENSE).
+`retrofsr` is a tiny C++23 CPU spatial upscaling library intended for emulator frontends and render backends. It is **FSR-1-inspired**, not a bit-equivalent implementation of AMD FSR. The implementation is portable C++ and MIT-licensed; the optional RCAS noise detector adapts AMD code with attribution in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 It provides three practical presets:
 
