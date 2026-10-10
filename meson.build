@@ -51,8 +51,9 @@ pkg.generate(
   version: meson.project_version(),
 )
 
-# CLI tests are plain python scripts; skip them gracefully where python3 is absent.
-python3 = find_program('python3', required: false)
+# Tests use the locked Python 3.14 project; runtime library consumers need no Python.
+uv = find_program('uv', required: get_option('tests'))
+python_test_args = ['run', '--locked', '--project', meson.project_source_root(), 'python']
 
 if get_option('examples')
   scale_ppm_exe = executable(
@@ -61,8 +62,8 @@ if get_option('examples')
     dependencies: retrofsr_dep,
     install: false,
   )
-  if get_option('tests') and python3.found()
-    test('scale-ppm-cli', python3, args: [files('tests/tools/test_scale_ppm.py'), scale_ppm_exe])
+  if get_option('tests')
+    test('scale-ppm-cli', uv, args: python_test_args + [files('tests/tools/test_scale_ppm.py'), scale_ppm_exe])
   endif
 endif
 
@@ -98,8 +99,8 @@ if get_option('tools')
     'tools/retrofsr_compare.cpp',
     install: false,
   )
-  if get_option('tests') and python3.found()
-    test('compare-cli', python3, args: [files('tests/tools/test_compare_cli.py'), retrofsr_compare_exe])
+  if get_option('tests')
+    test('compare-cli', uv, args: python_test_args + [files('tests/tools/test_compare_cli.py'), retrofsr_compare_exe])
   endif
 endif
 

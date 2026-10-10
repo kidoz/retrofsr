@@ -24,6 +24,17 @@ It provides three practical presets:
 
 ## Build
 
+Development scripts and CLI tests use **Python 3.14**, managed by
+[uv](https://docs.astral.sh/uv/). Install the locked development environment first:
+
+```sh
+uv sync --locked
+```
+
+The C++ library has no Python runtime dependency; builds with `-Dtests=false`
+do not require uv. Python checks cover `tools/` and `tests/tools/`; local agent
+framework scripts and downloaded dependencies are outside that scope.
+
 ```sh
 meson setup build
 meson compile -C build
@@ -149,7 +160,9 @@ The shared-library ABI version is 0.6. No runtime dependencies were added.
 
 With [`just`](https://github.com/casey/just) installed:
 
-- `just quality` — image-quality regression suite: golden images plus dither, alpha, and anti-ringing property tests.
+- `just quality` — Ruff lint/format checks, strict mypy, and all Meson regression tests.
+- `just python-check` — Python checks only; `just format` formats both C++ and Python.
+- `just check` — Python checks, C++ formatting/clang-tidy, and the complete test suite.
 - `just golden` — regenerate golden expectations after an intentional image-quality change (review the diff before committing).
 - `just compare a.ppm b.ppm --min-psnr 40 --min-ssim 0.98` — MSE/PSNR/SSIM between two PPM images with optional pass/fail thresholds (`retrofsr_compare`).
 - `just bench` — throughput and latency per filter for 256x240, 320x240, 640x480, 1280x720, and 1920x1080 sources at 2x upscale (`retrofsr_bench`).

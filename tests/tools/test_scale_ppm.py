@@ -31,10 +31,10 @@ MODES = [
     "easu",
 ]
 
-FAILURES = []
+FAILURES: list[str] = []
 
 
-def check(condition, message):
+def check(condition: bool, message: str) -> None:
     if not condition:
         FAILURES.append(message)
         print(f"FAIL: {message}")
@@ -42,7 +42,7 @@ def check(condition, message):
         print(f"ok: {message}")
 
 
-def write_ppm(path, width, height, magic=b"P6"):
+def write_ppm(path: Path, width: int, height: int, magic: bytes = b"P6") -> None:
     data = bytearray()
     for y in range(height):
         for x in range(width):
@@ -50,20 +50,20 @@ def write_ppm(path, width, height, magic=b"P6"):
     path.write_bytes(magic + b"\n%d %d\n255\n" % (width, height) + bytes(data))
 
 
-def read_header(path):
+def read_header(path: Path) -> tuple[bytes, bytes, bytes, bytes]:
     payload = path.read_bytes()
     magic, size, maxval, rest = payload.split(b"\n", 3)
     return magic, size, maxval, rest
 
 
-def run(tool, *args):
+def run(tool: str, *args: str | Path | int | float) -> subprocess.CompletedProcess[str]:
     return subprocess.run([tool, *map(str, args)], capture_output=True, text=True, timeout=120)
 
 
-def main():
+def main() -> int:
     tool = sys.argv[1]
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
         src = tmp / "in.ppm"
         write_ppm(src, 16, 12)
 
@@ -113,14 +113,21 @@ def main():
         # Invalid inputs: exit 1 with a diagnostic.
         r = run(tool, src, tmp / "x.ppm", 0, 30)
         check(r.returncode == 1 and "invalid" in r.stderr, "zero width is rejected")
-        check(run(tool, src, tmp / "x.ppm", 99999999999, 30).returncode == 1, "out-of-range width is rejected")
-        check(run(tool, src, tmp / "x.ppm", 4294967295, 30).returncode == 1, "unrepresentable size is rejected")
+        check(
+            run(tool, src, tmp / "x.ppm", 99999999999, 30).returncode == 1, "out-of-range width is rejected"
+        )
+        check(
+            run(tool, src, tmp / "x.ppm", 4294967295, 30).returncode == 1, "unrepresentable size is rejected"
+        )
         check(run(tool, src, tmp / "x.ppm", 32, 24, "bogus").returncode == 1, "unknown mode is rejected")
-        check(run(tool, tmp / "missing.ppm", tmp / "x.ppm", 32, 24).returncode == 1, "missing input is rejected")
+        check(
+            run(tool, tmp / "missing.ppm", tmp / "x.ppm", 32, 24).returncode == 1, "missing input is rejected"
+        )
 
         bad = tmp / "bad.ppm"
         write_ppm(bad, 8, 8, magic=b"P5")
         check(run(tool, bad, tmp / "x.ppm", 16, 16).returncode == 1, "non-P6 input is rejected")
+
 
     if FAILURES:
         print(f"{len(FAILURES)} check(s) failed")

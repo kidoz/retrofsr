@@ -10,12 +10,13 @@ pass, exit 1 when a threshold is violated, exit 2 for usage/file errors.
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
-FAILURES = []
+FAILURES: list[str] = []
 
 
-def check(condition, message):
+def check(condition: bool, message: str) -> None:
     if not condition:
         FAILURES.append(message)
         print(f"FAIL: {message}")
@@ -23,7 +24,15 @@ def check(condition, message):
         print(f"ok: {message}")
 
 
-def write_ppm(path, width, height, pixel_fn, maxval=255, magic=b"P6", truncate=0):
+def write_ppm(
+    path: Path,
+    width: int,
+    height: int,
+    pixel_fn: Callable[[int, int], tuple[int, int, int]],
+    maxval: int = 255,
+    magic: bytes = b"P6",
+    truncate: int = 0,
+) -> None:
     data = bytearray()
     for y in range(height):
         for x in range(width):
@@ -33,32 +42,32 @@ def write_ppm(path, width, height, pixel_fn, maxval=255, magic=b"P6", truncate=0
     path.write_bytes(magic + b"\n%d %d\n%d\n" % (width, height, maxval) + bytes(data))
 
 
-def run(tool, *args):
+def run(tool: str, *args: str | Path | int | float) -> subprocess.CompletedProcess[str]:
     return subprocess.run([tool, *map(str, args)], capture_output=True, text=True, timeout=60)
 
 
-def metric(stdout, name):
+def metric(stdout: str, name: str) -> float:
     for line in stdout.splitlines():
         if line.startswith(name + ":"):
             return float(line.split(":", 1)[1])
     raise AssertionError(f"metric {name} not found in output: {stdout!r}")
 
 
-def main():
+def main() -> int:
     tool = sys.argv[1]
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
         base = tmp / "base.ppm"
         same = tmp / "same.ppm"
         noisy = tmp / "noisy.ppm"
         noisier = tmp / "noisier.ppm"
         small = tmp / "small.ppm"
 
-        def gradient(x, y):
+        def gradient(x: int, y: int) -> tuple[int, int, int]:
             return ((x * 4) % 256, (y * 5) % 256, 128)
 
-        def with_noise(amplitude):
-            def fn(x, y):
+        def with_noise(amplitude: int) -> Callable[[int, int], tuple[int, int, int]]:
+            def fn(x: int, y: int) -> tuple[int, int, int]:
                 r, g, b = gradient(x, y)
                 n = ((x * 7 + y * 13) % (2 * amplitude + 1)) - amplitude
                 return (max(0, min(255, r + n)), max(0, min(255, g + n)), b)
@@ -88,9 +97,14 @@ def main():
         # Thresholds: pass -> 0, violation -> 1.
         psnr = metric(r1.stdout, "psnr_db")
         check(run(tool, base, noisy, "--min-psnr", psnr - 5).returncode == 0, "met PSNR threshold exits 0")
-        check(run(tool, base, noisy, "--min-psnr", psnr + 5).returncode == 1, "violated PSNR threshold exits 1")
+        check(
+            run(tool, base, noisy, "--min-psnr", psnr + 5).returncode == 1, "violated PSNR threshold exits 1"
+        )
         check(run(tool, base, noisy, "--min-ssim", "0.5").returncode == 0, "met SSIM threshold exits 0")
-        check(run(tool, base, noisy, "--min-ssim", "0.9999999").returncode == 1, "violated SSIM threshold exits 1")
+        check(
+            run(tool, base, noisy, "--min-ssim", "0.9999999").returncode == 1,
+            "violated SSIM threshold exits 1",
+        )
 
         # Usage/file errors: exit 2.
         check(run(tool).returncode == 2, "no arguments exits 2")
@@ -100,7 +114,10 @@ def main():
         check(r.returncode == 2, "missing threshold value exits 2")
         check("missing value" in r.stderr, "missing threshold value is reported clearly")
         check(run(tool, base, noisy, "--bogus").returncode == 2, "unknown argument exits 2")
-        check(run(tool, base, noisy, "--min-psnr", "not-a-number").returncode == 2, "non-numeric threshold exits 2")
+        check(
+            run(tool, base, noisy, "--min-psnr", "not-a-number").returncode == 2,
+            "non-numeric threshold exits 2",
+        )
 
         malformed = tmp / "malformed.ppm"
         write_ppm(malformed, 8, 8, gradient, magic=b"P5")

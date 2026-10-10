@@ -28,9 +28,9 @@ golden: setup
     meson compile -C "{{build_dir}}" retrofsr_golden_gen
     ./"{{build_dir}}"/retrofsr_golden_gen tests/data/golden
 
-# Image-quality regression suite: golden images plus quality/dither/alpha property tests.
-quality: build
-    ./"{{build_dir}}"/retrofsr_basic_test "[golden],[quality],[dither],[alpha],[fixtures]"
+# Python quality gates and the full regression suite, including visual-report checks.
+quality: python-check build
+    meson test -C "{{build_dir}}" --print-errorlogs
 
 # Compare two PPM images: prints MSE/PSNR/SSIM; pass --min-psnr/--min-ssim thresholds.
 compare a b *args: build
@@ -51,9 +51,20 @@ bench:
 
 format:
     clang-format -i {{format_files}}
+    uv run --locked ruff format
 
 format-check:
     clang-format --dry-run --Werror {{format_files}}
+    uv run --locked ruff format --check
+
+# Reproducible Python 3.14 environment, lint/format, and strict type checking.
+python-setup:
+    uv sync --locked
+
+python-check:
+    uv run --locked ruff check
+    uv run --locked ruff format --check
+    uv run --locked mypy
 
 tidy: setup
     @sdk="$(xcrun --show-sdk-path 2>/dev/null || true)"; \
@@ -65,6 +76,7 @@ tidy-fix: setup
     if [ -n "$sdk" ]; then sdk_arg="--extra-arg=-isysroot$sdk"; else sdk_arg=""; fi; \
     clang-tidy -p "{{build_dir}}" $sdk_arg --fix {{tidy_files}}
 
-lint: format-check tidy
+lint: python-check format-check tidy
 
-check: format-check tidy test
+check: python-check format-check tidy test
+
