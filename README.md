@@ -168,7 +168,54 @@ With [`just`](https://github.com/casey/just) installed:
 - `just check` — Python checks, C++ formatting/clang-tidy, and the complete test suite.
 - `just golden` — regenerate golden expectations after an intentional image-quality change (review the diff before committing).
 - `just compare a.ppm b.ppm --min-psnr 40 --min-ssim 0.98` — MSE/PSNR/SSIM between two PPM images with optional pass/fail thresholds (`retrofsr_compare`).
-- `just bench` — throughput and latency per filter for 256x240, 320x240, 640x480, 1280x720, and 1920x1080 sources at 2x upscale (`retrofsr_bench`).
+- `just bench` — repeated wall-clock latency and output Mpix/s, with JSON saved to `buildBench/latest.json`.
+- `just bench-compare before.json after.json` — compare two Google Benchmark JSON runs.
+
+## Repeatable benchmarks
+
+`just bench` builds the pinned Google Benchmark 1.8.4 WrapDB dependency only in
+`buildBench` with `-Dbenchmarks=true`. The default library build does not use it.
+The matrix contains 180 cases: 12 modes × five source sizes × three worker
+settings (0=automatic, 1, 4), all at 2× per axis with RGBA8 pixels.
+
+The `legacy/` cases preserve the original seven-filter workload with default
+sRGB and CAS sharpening 0.20. The `fsr1/` cases compare baseline, noise,
+coherence, and both using perceptual EASU + RCAS at 0.20. `pixel_art/nearest`
+disables sharpening. Each case name identifies its source size and worker count.
+
+The default runs five repetitions with randomized interleaving and a 0.2-second
+minimum per repetition; the full matrix can take several minutes. The console
+shows aggregate statistics, while JSON retains individual repetitions. A focused
+comparison is quicker:
+
+```sh
+just bench '--benchmark_filter=^(fsr1/.*|pixel_art/nearest)/256x240/workers:4/' --benchmark_repetitions=10 --benchmark_out=buildBench/before.json
+# Make the intended change, then repeat the same workload and settings:
+just bench '--benchmark_filter=^(fsr1/.*|pixel_art/nearest)/256x240/workers:4/' --benchmark_repetitions=10 --benchmark_out=buildBench/after.json
+just bench-compare buildBench/before.json buildBench/after.json
+```
+
+Additional Google Benchmark flags pass through unchanged. Use
+`just bench --benchmark_list_tests=true` to list cases. The former positional
+thread-count argument is replaced by filtering on `/workers:1/`, `/workers:4/`,
+or `/workers:0/`. `BENCH_DIR` overrides the build directory. The default
+`latest.json` is overwritten; use explicit output names to preserve baselines.
+
+Wall time includes internal allocations and worker startup, but excludes source
+creation, destination allocation, and one warmup. Throughput counts destination
+pixels. Mean/median/stddev describe repetition-average latency, **not per-frame
+p95**. Prefer wall time over the runner's CPU-time column for this internally
+threaded workload. Compare matching hardware, compiler, build type, SIMD setting,
+and case names; JSON records these build settings plus workload metadata.
+
+`bench-compare` runs upstream `compare.py` with the uv `benchmark` dependency
+group (NumPy/SciPy versions compatible with Python 3.14). These packages are not
+part of the library or ordinary Python development environment. Its output is a
+diagnostic comparison, not a regression pass/fail threshold. Use at least ten
+repetitions for comparisons; upstream warns that its U-test is unreliable below
+nine. Short smoke runs validate the workflow, not performance changes. A benchmark-enabled
+build adds the `benchmark-cli` Meson test for case coverage, JSON and throughput
+contracts. Timing assertions do not impose machine-dependent speed limits.
 
 ## Downscaling
 
