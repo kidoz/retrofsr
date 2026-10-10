@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -220,6 +221,21 @@ inline constexpr auto configs = make_configs();
     const bool pam =
         config.dst_format != retrofsr::PixelFormat::rgb565 && config.dst_format != retrofsr::PixelFormat::bgr565;
     return case_name(config) + (pam ? ".pam" : ".bin");
+}
+
+/// One exact manifest row for a config, shared by the generator (which writes it) and
+/// the test (which requires the committed manifest to match it line for line).
+[[nodiscard]] inline std::string manifest_row(const Config& config) {
+    const std::size_t bytes =
+        static_cast<std::size_t>(config.dst_width) * config.dst_height * retrofsr::bytes_per_pixel(config.dst_format);
+    std::ostringstream row;
+    row << case_name(config) << ' ' << golden_file_name(config) << ' ' << static_cast<int>(config.filter) << ' '
+        << static_cast<int>(config.color_space) << ' ' << static_cast<int>(config.sharpen) << ' '
+        << static_cast<int>(config.dither) << ' ' << static_cast<int>(config.alpha) << ' '
+        << static_cast<int>(config.dst_format) << ' ' << static_cast<int>(config.source) << ' ' << config.sharpening
+        << ' ' << config.src_width << 'x' << config.src_height << ' ' << config.dst_width << 'x' << config.dst_height
+        << ' ' << bytes;
+    return row.str();
 }
 
 /// PAM (P7) header for the formats we store; 565 cases use raw .bin instead.

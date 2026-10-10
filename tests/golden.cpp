@@ -78,17 +78,21 @@ TEST_CASE("renders match the on-disk golden images", "[golden]") {
         REQUIRE(names.insert(golden::case_name(config)).second);
     }
 
-    // The committed manifest must list exactly the configured cases; a mismatch means
-    // the matrix changed without regeneration (fix with: just golden).
+    // The committed manifest must mirror the configured cases exactly, row for row;
+    // a mismatch means the matrix changed without regeneration (fix with: just golden).
     std::ifstream manifest(dir + "/manifest.txt");
     REQUIRE(manifest.good());
-    std::size_t listed = 0;
+    std::vector<std::string> listed;
     for (std::string line; std::getline(manifest, line);) {
         if (!line.empty() && line[0] != '#') {
-            ++listed;
+            listed.push_back(line);
         }
     }
-    REQUIRE(listed == golden::configs.size());
+    REQUIRE(listed.size() == golden::configs.size());
+    for (std::size_t i = 0; i < golden::configs.size(); ++i) {
+        CAPTURE(i, golden::case_name(golden::configs[i]));
+        REQUIRE(listed[i] == golden::manifest_row(golden::configs[i]));
+    }
 
     for (const auto& config : golden::configs) {
         const std::string name = golden::case_name(config);
