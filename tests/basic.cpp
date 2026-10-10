@@ -21,7 +21,7 @@ bool run_filter(retrofsr::Filter filter) {
             const std::size_t i = (static_cast<std::size_t>(y) * sw + x) * 4;
             src[i + 0] = static_cast<std::byte>((x * 255) / (sw - 1));
             src[i + 1] = static_cast<std::byte>((y * 255) / (sh - 1));
-            src[i + 2] = static_cast<std::byte>(((x ^ y) & 1) ? 255 : 0);
+            src[i + 2] = static_cast<std::byte>(((x ^ y) & 1u) ? 255 : 0);
             src[i + 3] = static_cast<std::byte>(255);
         }
     }

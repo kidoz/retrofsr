@@ -84,7 +84,7 @@ inline constexpr std::array patterns = {
     std::uint32_t rng = 0x9e3779b9u;
     const auto next_random = [&rng]() noexcept {
         rng = rng * 1664525u + 1013904223u;
-        return static_cast<std::uint8_t>(rng >> 24);
+        return static_cast<std::uint8_t>(rng >> 24u);
     };
 
     for (std::uint32_t y = 0; y < height; ++y) {

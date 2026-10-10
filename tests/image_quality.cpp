@@ -56,11 +56,11 @@ std::vector<std::byte> filled_rgba(std::uint32_t w, std::uint32_t h, std::uint8_
     return image;
 }
 
-[[nodiscard]] int red5_from_565(const std::vector<std::byte>& image, std::size_t pixel_index) {
+[[nodiscard]] std::uint32_t red5_from_565(const std::vector<std::byte>& image, std::size_t pixel_index) {
     const auto lo = static_cast<std::uint8_t>(image[pixel_index * 2]);
     const auto hi = static_cast<std::uint8_t>(image[pixel_index * 2 + 1]);
-    const auto packed = static_cast<std::uint16_t>(lo | (hi << 8));
-    return (packed >> 11) & 0x1f;
+    const auto packed = static_cast<std::uint32_t>(lo) | (static_cast<std::uint32_t>(hi) << 8u);
+    return (packed >> 11u) & 0x1fu;
 }
 
 } // namespace
@@ -115,10 +115,10 @@ TEST_CASE("ordered dithering reduces banding error on rgb565 gradients", "[dithe
                     const std::size_t p = static_cast<std::size_t>(y) * dw + x;
                     ref_sum += static_cast<double>(static_cast<std::uint8_t>(reference[p * 4]));
                     // Expand 5-bit red back to 8-bit the same way the loader does.
-                    const int r5p = red5_from_565(plain, p);
-                    const int r5d = red5_from_565(dithered, p);
-                    plain_sum += (r5p << 3) | (r5p >> 2);
-                    dith_sum += (r5d << 3) | (r5d >> 2);
+                    const auto r5p = red5_from_565(plain, p);
+                    const auto r5d = red5_from_565(dithered, p);
+                    plain_sum += (r5p << 3u) | (r5p >> 2u);
+                    dith_sum += (r5d << 3u) | (r5d >> 2u);
                 }
             }
             plain_error += std::abs(plain_sum - ref_sum);
@@ -292,7 +292,7 @@ TEST_CASE("every pixel format upscales end-to-end", "[formats]") {
         const std::size_t bpp = retrofsr::bytes_per_pixel(format);
         std::vector<std::byte> src(static_cast<std::size_t>(sw) * sh * bpp);
         for (std::size_t i = 0; i < src.size(); ++i) {
-            src[i] = static_cast<std::byte>((i * 31 + 7) & 0xff);
+            src[i] = static_cast<std::byte>((i * 31 + 7) & 0xffu);
         }
         std::vector<std::byte> dst(static_cast<std::size_t>(dw) * dh * bpp);
 

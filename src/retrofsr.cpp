@@ -171,23 +171,23 @@ constexpr Color4& operator+=(Color4& x, Color4 y) noexcept {
     case PixelFormat::bgrx8:
         return {from_u8(u8(p[2]), color_space), from_u8(u8(p[1]), color_space), from_u8(u8(p[0]), color_space), 1.0f};
     case PixelFormat::rgb565: {
-        const auto packed = static_cast<std::uint16_t>(u8(p[0]) | (static_cast<std::uint16_t>(u8(p[1])) << 8));
-        const auto r5 = static_cast<std::uint8_t>((packed >> 11) & 0x1f);
-        const auto g6 = static_cast<std::uint8_t>((packed >> 5) & 0x3f);
-        const auto b5 = static_cast<std::uint8_t>(packed & 0x1f);
-        const auto r8 = static_cast<std::uint8_t>((r5 << 3) | (r5 >> 2));
-        const auto g8 = static_cast<std::uint8_t>((g6 << 2) | (g6 >> 4));
-        const auto b8 = static_cast<std::uint8_t>((b5 << 3) | (b5 >> 2));
+        const auto packed = static_cast<std::uint32_t>(u8(p[0])) | (static_cast<std::uint32_t>(u8(p[1])) << 8u);
+        const auto r5 = (packed >> 11u) & 0x1fu;
+        const auto g6 = (packed >> 5u) & 0x3fu;
+        const auto b5 = packed & 0x1fu;
+        const auto r8 = static_cast<std::uint8_t>((r5 << 3u) | (r5 >> 2u));
+        const auto g8 = static_cast<std::uint8_t>((g6 << 2u) | (g6 >> 4u));
+        const auto b8 = static_cast<std::uint8_t>((b5 << 3u) | (b5 >> 2u));
         return {from_u8(r8, color_space), from_u8(g8, color_space), from_u8(b8, color_space), 1.0f};
     }
     case PixelFormat::bgr565: {
-        const auto packed = static_cast<std::uint16_t>(u8(p[0]) | (static_cast<std::uint16_t>(u8(p[1])) << 8));
-        const auto b5 = static_cast<std::uint8_t>((packed >> 11) & 0x1f);
-        const auto g6 = static_cast<std::uint8_t>((packed >> 5) & 0x3f);
-        const auto r5 = static_cast<std::uint8_t>(packed & 0x1f);
-        const auto r8 = static_cast<std::uint8_t>((r5 << 3) | (r5 >> 2));
-        const auto g8 = static_cast<std::uint8_t>((g6 << 2) | (g6 >> 4));
-        const auto b8 = static_cast<std::uint8_t>((b5 << 3) | (b5 >> 2));
+        const auto packed = static_cast<std::uint32_t>(u8(p[0])) | (static_cast<std::uint32_t>(u8(p[1])) << 8u);
+        const auto b5 = (packed >> 11u) & 0x1fu;
+        const auto g6 = (packed >> 5u) & 0x3fu;
+        const auto r5 = packed & 0x1fu;
+        const auto r8 = static_cast<std::uint8_t>((r5 << 3u) | (r5 >> 2u));
+        const auto g8 = static_cast<std::uint8_t>((g6 << 2u) | (g6 >> 4u));
+        const auto b8 = static_cast<std::uint8_t>((b5 << 3u) | (b5 >> 2u));
         return {from_u8(r8, color_space), from_u8(g8, color_space), from_u8(b8, color_space), 1.0f};
     }
     case PixelFormat::gray8: {
@@ -263,18 +263,20 @@ void store_raw_pixel(std::byte* p, PixelFormat format, Color4 c, ColorSpace colo
         const auto r5 = quantize_channel(encode_channel(c.r, color_space), 31, dither);
         const auto g6 = quantize_channel(encode_channel(c.g, color_space), 63, dither);
         const auto b5 = quantize_channel(encode_channel(c.b, color_space), 31, dither);
-        const auto packed = static_cast<std::uint16_t>((r5 << 11) | (g6 << 5) | b5);
-        p[0] = b(static_cast<std::uint8_t>(packed & 0xff));
-        p[1] = b(static_cast<std::uint8_t>(packed >> 8));
+        const auto packed = (static_cast<std::uint32_t>(r5) << 11u) | (static_cast<std::uint32_t>(g6) << 5u) |
+                            static_cast<std::uint32_t>(b5);
+        p[0] = b(static_cast<std::uint8_t>(packed & 0xffu));
+        p[1] = b(static_cast<std::uint8_t>(packed >> 8u));
         break;
     }
     case PixelFormat::bgr565: {
         const auto b5 = quantize_channel(encode_channel(c.b, color_space), 31, dither);
         const auto g6 = quantize_channel(encode_channel(c.g, color_space), 63, dither);
         const auto r5 = quantize_channel(encode_channel(c.r, color_space), 31, dither);
-        const auto packed = static_cast<std::uint16_t>((b5 << 11) | (g6 << 5) | r5);
-        p[0] = b(static_cast<std::uint8_t>(packed & 0xff));
-        p[1] = b(static_cast<std::uint8_t>(packed >> 8));
+        const auto packed = (static_cast<std::uint32_t>(b5) << 11u) | (static_cast<std::uint32_t>(g6) << 5u) |
+                            static_cast<std::uint32_t>(r5);
+        p[0] = b(static_cast<std::uint8_t>(packed & 0xffu));
+        p[1] = b(static_cast<std::uint8_t>(packed >> 8u));
         break;
     }
     case PixelFormat::gray8: {
