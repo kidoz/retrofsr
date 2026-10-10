@@ -56,6 +56,11 @@ bench-build: bench-setup
 bench *args: bench-build
     ./"{{bench_dir}}"/retrofsr_bench --benchmark_repetitions=5 --benchmark_min_time=0.2s --benchmark_enable_random_interleaving=true --benchmark_display_aggregates_only=true --benchmark_out="{{bench_dir}}/latest.json" --benchmark_out_format=json "$@"
 
+# This path follows the version pinned by subprojects/google-benchmark.wrap.
+[positional-arguments]
+bench-compare before after: bench-setup
+    uv run --locked --group benchmark python subprojects/benchmark-1.8.4/tools/compare.py --no-color --display_aggregates_only benchmarks "$1" "$2"
+
 format:
     clang-format -i {{format_files}}
     uv run --locked ruff format

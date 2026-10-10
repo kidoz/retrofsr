@@ -9,6 +9,10 @@ dependencies = []
 package = false
 
 [dependency-groups]
+benchmark = [
+    "numpy>=2.3,<3",
+    "scipy>=1.16,<2",
+]
 dev = [
     "mypy>=1.19,<3",
     "ruff>=0.14,<1",
