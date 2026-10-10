@@ -172,6 +172,10 @@ With [`just`](https://github.com/casey/just) installed:
 - `just bench` — repeated wall-clock latency and output Mpix/s, with JSON saved to `buildBench/latest.json`.
 - `just bench-compare before.json after.json` — compare two Google Benchmark JSON runs.
 
+Golden tests cover RCAS downscaling across color spaces, alpha modes, and dithered
+low-bit output. An inventory check rejects missing or unconfigured `.pam`/`.bin`
+images. Extreme-downscale tests also exercise the support cap and staged reduction.
+
 ## Repeatable benchmarks
 
 `just bench` builds the pinned Google Benchmark 1.8.4 WrapDB dependency only in

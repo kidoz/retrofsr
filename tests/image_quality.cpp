@@ -489,6 +489,142 @@ TEST_CASE("downscaling is anti-aliased for every widened filter", "[downscale]")
     REQUIRE(any_extreme);
 }
 
+TEST_CASE("RCAS downscaling preserves alpha and composites low-bit output consistently", "[downscale][rcas][alpha]") {
+    constexpr std::uint32_t sw = 64;
+    constexpr std::uint32_t sh = 96;
+    constexpr std::uint32_t dw = 32;
+    constexpr std::uint32_t dh = 48; // Exercise actual row workers, not the tiny-image fallback.
+    auto straight = filled_rgba(sw, sh, 255, 0, 0);
+    auto premult = straight;
+    for (std::uint32_t y = 0; y < sh; ++y) {
+        for (std::uint32_t x = 0; x < sw; ++x) {
+            const auto i = (static_cast<std::size_t>(y) * sw + x) * 4;
+            const bool visible = x >= 11 && x < 51 && y >= 17 && y < 77;
+            const auto alpha = static_cast<std::byte>(visible ? 255 : 0);
+            straight[i + 3] = premult[i + 3] = alpha;
+            straight[i + 1] = static_cast<std::byte>(visible ? 0 : 255); // Hidden green must not bleed.
+            premult[i] = alpha;
+        }
+    }
+    for (const auto space : {ColorSpace::srgb, ColorSpace::linear, ColorSpace::perceptual}) {
+        for (const auto dither : {Dither::none, Dither::ordered}) {
+            for (const bool noise : {false, true}) {
+                CAPTURE(static_cast<int>(space), static_cast<int>(dither), noise);
+                Options options = retrofsr::fsr1_style_options();
+                options.color_space = space;
+                options.dither = dither;
+                options.rcas_noise_suppression = noise;
+                options.sharpening = 1.0f;
+                for (const auto alpha : {AlphaMode::straight, AlphaMode::premultiplied}) {
+                    CAPTURE(static_cast<int>(alpha));
+                    options.alpha = alpha;
+                    options.thread_count = 1;
+                    const auto& src = alpha == AlphaMode::straight ? straight : premult;
+                    const auto sharp = upscale_to(src, sw, sh, dw, dh, PixelFormat::rgba8, options);
+                    options.thread_count = 4;
+                    REQUIRE(upscale_to(src, sw, sh, dw, dh, PixelFormat::rgba8, options) == sharp);
+                    auto soft_options = options;
+                    soft_options.sharpening = 0.0f;
+                    const auto soft = upscale_to(src, sw, sh, dw, dh, PixelFormat::rgba8, soft_options);
+                    for (std::size_t i = 0; i < sharp.size(); i += 4) {
+                        CAPTURE(i);
+                        REQUIRE(sharp[i + 1] == std::byte{0});
+                        REQUIRE(sharp[i + 2] == std::byte{0});
+                        REQUIRE(sharp[i + 3] == soft[i + 3]);
+                        if (alpha == AlphaMode::premultiplied && space != ColorSpace::srgb) {
+                            REQUIRE(sharp[i] <= sharp[i + 3]);
+                        }
+                    }
+                }
+                // Alpha-less destinations composite over black. Binary source alpha
+                // makes these two representations exactly equivalent in all color spaces.
+                for (const auto format : {PixelFormat::rgb565, PixelFormat::gray8}) {
+                    CAPTURE(static_cast<int>(format));
+                    options.alpha = AlphaMode::straight;
+                    options.thread_count = 1;
+                    const auto reference = upscale_to(straight, sw, sh, dw, dh, format, options);
+                    options.thread_count = 4;
+                    REQUIRE(upscale_to(straight, sw, sh, dw, dh, format, options) == reference);
+                    options.alpha = AlphaMode::premultiplied;
+                    REQUIRE(upscale_to(premult, sw, sh, dw, dh, format, options) == reference);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("RCAS increases edge contrast after downscaling", "[downscale][rcas]") {
+    auto src = filled_rgba(64, 96, 96, 96, 96);
+    for (std::uint32_t y = 0; y < 96; ++y) {
+        for (std::uint32_t x = 32; x < 64; ++x) {
+            const auto i = (static_cast<std::size_t>(y) * 64 + x) * 4;
+            src[i] = src[i + 1] = src[i + 2] = std::byte{160};
+        }
+    }
+    for (const auto filter : {Filter::bilinear, Filter::easu}) {
+        CAPTURE(static_cast<int>(filter));
+        Options options = retrofsr::fsr1_style_options();
+        options.filter = filter;
+        options.thread_count = 4;
+        options.sharpening = 0.0f;
+        const auto soft = upscale_to(src, 64, 96, 32, 48, PixelFormat::rgba8, options);
+        options.sharpening = 1.0f;
+        const auto sharp = upscale_to(src, 64, 96, 32, 48, PixelFormat::rgba8, options);
+        const auto max_step = [](const auto& image) {
+            int step = 0;
+            for (std::size_t x = 1; x < 32; ++x) {
+                const auto i = (std::size_t{24} * 32 + x) * 4;
+                step = std::max(step, std::abs(static_cast<int>(image[i]) - static_cast<int>(image[i - 4])));
+            }
+            return step;
+        };
+        REQUIRE(max_step(sharp) > max_step(soft));
+    }
+}
+
+TEST_CASE("extreme downscaling can alias beyond the support cap and staged reduction avoids it", "[downscale]") {
+    // Each 32-column cell is half white, but its central 16 columns are all white.
+    // At 32:1 every output center sees only white within the capped +/-8 support.
+    auto src = filled_rgba(512, 64, 0, 0, 0);
+    for (std::uint32_t y = 0; y < 64; ++y) {
+        for (std::uint32_t x = 0; x < 512; ++x) {
+            const auto i = (static_cast<std::size_t>(y) * 512 + x) * 4;
+            const auto value = static_cast<std::byte>(x % 32 >= 8 && x % 32 < 24 ? 255 : 0);
+            src[i] = src[i + 1] = src[i + 2] = value;
+        }
+    }
+    for (const auto filter : {Filter::bilinear, Filter::sharp_bilinear, Filter::catmull_rom, Filter::lanczos3,
+                              Filter::edge_adaptive_lanczos, Filter::easu}) {
+        CAPTURE(static_cast<int>(filter));
+        Options options{};
+        options.filter = filter;
+        options.color_space = ColorSpace::linear;
+        options.sharpening = 0.0f;
+        options.thread_count = 1;
+        const auto direct = upscale_to(src, 512, 64, 16, 2, PixelFormat::rgba8, options);
+        REQUIRE(direct == filled_rgba(16, 2, 255, 255, 255));
+
+        auto staged = src;
+        for (std::uint32_t w = 512, h = 64; w > 16; w /= 2, h /= 2) {
+            staged = upscale_to(staged, w, h, w / 2, h / 2, PixelFormat::rgba8, options);
+        }
+        // Interior cells converge to the independently known 50% white mean.
+        // Exclude boundary cells influenced by clamped source edges.
+        for (std::uint32_t y = 0; y < 2; ++y) {
+            for (std::uint32_t x = 2; x < 14; ++x) {
+                const auto i = (static_cast<std::size_t>(y) * 16 + x) * 4;
+                for (std::size_t channel = 0; channel < 3; ++channel) {
+                    const auto value = static_cast<int>(staged[i + channel]);
+                    CAPTURE(x, y, channel, value);
+                    REQUIRE(value >= 120);
+                    REQUIRE(value <= 136);
+                }
+                REQUIRE(staged[i + 3] == std::byte{255});
+            }
+        }
+    }
+}
+
 TEST_CASE("flat input stays flat when downscaling", "[downscale]") {
     const auto src = filled_rgba(32, 24, 180, 90, 45);
     const std::uint8_t expected[4] = {180, 90, 45, 255};

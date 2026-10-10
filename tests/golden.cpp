@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <set>
 #include <string>
@@ -68,6 +69,25 @@ std::vector<std::byte> filled_rgba(std::uint32_t w, std::uint32_t h, std::uint8_
 }
 
 } // namespace
+
+TEST_CASE("golden directory contains exactly the configured images", "[golden][inventory]") {
+    std::set<std::string> expected;
+    for (const auto& config : golden::configs) {
+        REQUIRE(expected.insert(golden::golden_file_name(config)).second);
+    }
+    std::set<std::string> actual;
+    for (const auto& entry : std::filesystem::directory_iterator(golden::golden_dir())) {
+        const auto extension = entry.path().extension();
+        if (extension == ".pam" || extension == ".bin") {
+            const auto name = entry.path().filename().string();
+            CAPTURE(name);
+            REQUIRE(entry.is_regular_file());
+            REQUIRE(expected.contains(name));
+            actual.insert(name);
+        }
+    }
+    REQUIRE(actual == expected);
+}
 
 TEST_CASE("renders match the on-disk golden images", "[golden]") {
     const std::string dir = golden::golden_dir();

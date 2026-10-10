@@ -25,6 +25,8 @@ enum class Source : std::uint8_t {
     standard,
     /// The transparency fixture: warm color under an alpha ramp with a hard cut.
     transparency,
+    /// The same ramp with RGB premultiplied in byte-linear space (for linear cases).
+    premultiplied_transparency,
 };
 
 /// One golden rendering configuration. The list below is the single source of truth
@@ -58,7 +60,8 @@ inline constexpr std::array filters = {
 
 /// Full matrix: every filter in every color space, the RCAS sharpener over easu,
 /// dithered and undithered low-bit destinations, straight/premultiplied alpha,
-/// sharpening extremes, 2:1 downscales per filter, and one mixed-axis resize.
+/// sharpening extremes, 2:1 downscales per filter, one mixed-axis resize, and RCAS
+/// downscales across color spaces, alpha modes, low-bit output and dithering.
 [[nodiscard]] constexpr auto make_configs() noexcept {
     constexpr std::size_t count = filters.size() * color_spaces.size() // base upscale matrix
                                   + color_spaces.size()                // easu + rcas
@@ -66,7 +69,9 @@ inline constexpr std::array filters = {
                                   + 3                                  // alpha modes
                                   + 2                                  // sharpening extremes
                                   + filters.size()                     // 2:1 downscale
-                                  + 1;                                 // mixed-axis resize
+                                  + 1                                  // mixed-axis resize
+                                  + color_spaces.size()                // easu + rcas downscale
+                                  + 12;                                // 3 formats x 2 alpha modes x 2 dithers
     std::array<Config, count> configs{};
     std::size_t i = 0;
 
@@ -126,6 +131,37 @@ inline constexpr std::array filters = {
     configs[i].dst_height = 7;
     ++i;
 
+    for (const auto color_space : color_spaces) {
+        configs[i].filter = retrofsr::Filter::easu;
+        configs[i].color_space = color_space;
+        configs[i].sharpen = retrofsr::Sharpen::robust_contrast_adaptive;
+        configs[i].src_width = 16;
+        configs[i].src_height = 14;
+        configs[i].dst_width = 8;
+        configs[i].dst_height = 7;
+        ++i;
+    }
+    for (const auto format :
+         {retrofsr::PixelFormat::rgba8, retrofsr::PixelFormat::rgb565, retrofsr::PixelFormat::gray8}) {
+        for (const auto alpha : {retrofsr::AlphaMode::straight, retrofsr::AlphaMode::premultiplied}) {
+            for (const auto dither : {retrofsr::Dither::none, retrofsr::Dither::ordered}) {
+                configs[i].filter = retrofsr::Filter::easu;
+                configs[i].color_space = retrofsr::ColorSpace::linear;
+                configs[i].sharpen = retrofsr::Sharpen::robust_contrast_adaptive;
+                configs[i].dst_format = format;
+                configs[i].alpha = alpha;
+                configs[i].dither = dither;
+                configs[i].source = alpha == retrofsr::AlphaMode::premultiplied ? Source::premultiplied_transparency
+                                                                                : Source::transparency;
+                configs[i].src_width = 16;
+                configs[i].src_height = 14;
+                configs[i].dst_width = 8;
+                configs[i].dst_height = 7;
+                ++i;
+            }
+        }
+    }
+
     return configs;
 }
 
@@ -149,10 +185,20 @@ inline constexpr auto configs = make_configs();
 }
 
 [[nodiscard]] inline std::vector<std::byte> make_case_source(const Config& config) {
-    if (config.source == Source::transparency) {
-        return fixtures::make_rgba(fixtures::Pattern::transparency, config.src_width, config.src_height);
+    if (config.source == Source::standard) {
+        return make_standard_source(config.src_width, config.src_height);
     }
-    return make_standard_source(config.src_width, config.src_height);
+    auto src = fixtures::make_rgba(fixtures::Pattern::transparency, config.src_width, config.src_height);
+    if (config.source == Source::premultiplied_transparency) {
+        for (std::size_t i = 0; i < src.size(); i += 4) {
+            const auto alpha = static_cast<unsigned>(src[i + 3]);
+            for (std::size_t channel = 0; channel < 3; ++channel) {
+                src[i + channel] =
+                    static_cast<std::byte>((static_cast<unsigned>(src[i + channel]) * alpha + 127) / 255);
+            }
+        }
+    }
+    return src;
 }
 
 /// Render one golden configuration single-threaded.
