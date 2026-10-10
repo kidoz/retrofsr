@@ -172,7 +172,8 @@ With [`just`](https://github.com/casey/just) installed:
 `upscale()` also downscales, and does it with proper anti-aliasing: the filter kernel is
 widened per axis by the minification factor (the same approach as stb_image_resize,
 Pillow, and MATLAB `imresize`), so shrinking a checkerboard converges to its mean
-instead of shimmering. Mixed-axis resizes (one axis up, one down) are handled per axis.
+instead of shimmering. In mixed-axis resizes (one axis up, one down) the kernel widening
+is per axis, but the filter behavior switches below apply to the whole resize.
 
 Caveats:
 
@@ -180,8 +181,10 @@ Caveats:
 - `Filter::sharp_bilinear` behaves as plain (widened) bilinear when an axis downscales.
 - `Filter::easu` switches to a widened isotropic kernel with its anti-ringing clamp;
   the edge-directed logic only applies when upscaling.
-- Widened support is capped at 8 source texels per axis; for minification beyond ~4:1,
-  pre-reduce in steps.
+- Widened support is capped at 8 source texels per axis (per kernel radius), so the
+  alias-free limit depends on the filter: ~2.7:1 for `lanczos3`/`edge_adaptive_lanczos`,
+  4:1 for `catmull_rom`/`easu`, 8:1 for the bilinear family. Beyond that, pre-reduce in
+  steps.
 
 ## Notes for emulators
 
