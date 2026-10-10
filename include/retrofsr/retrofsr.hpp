@@ -126,6 +126,16 @@ struct Options {
 
     /// 0 = choose automatically. 1 = single-threaded.
     std::uint32_t thread_count = 0;
+
+    /// Reduce RCAS sharpening of locally noise-like detail. Only used by
+    /// robust_contrast_adaptive; this limits amplification, it does not denoise.
+    /// Off by default because intentional dithering and fine textures can resemble noise.
+    bool rcas_noise_suppression = false;
+
+    /// Experimental: attenuate EASU directional stretching where neighboring gradients
+    /// disagree. Only affects EASU upscaling, not its minification fallback.
+    /// Off by default pending visual evaluation on emulator content.
+    bool easu_edge_coherence = false;
 };
 
 /// Suggested settings for 2D console pixel art, HUDs, and tile/sprite output.

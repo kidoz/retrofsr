@@ -603,9 +603,19 @@ inline constexpr float max_minify_support = 8.0f;
     // quad nearest the sample point. The gradient points across the local edge.
     float dir_x = 0.0f;
     float dir_y = 0.0f;
+    float tensor_xx = 0.0f;
+    float tensor_xy = 0.0f;
+    float tensor_yy = 0.0f;
     const auto accumulate_gradient = [&](std::int32_t i, std::int32_t j, float w) noexcept {
-        dir_x += (lum[j][i + 1] - lum[j][i - 1]) * w;
-        dir_y += (lum[j + 1][i] - lum[j - 1][i]) * w;
+        const float gx = lum[j][i + 1] - lum[j][i - 1];
+        const float gy = lum[j + 1][i] - lum[j - 1][i];
+        dir_x += gx * w;
+        dir_y += gy * w;
+        if (options.easu_edge_coherence) {
+            tensor_xx += gx * gx * w;
+            tensor_xy += gx * gy * w;
+            tensor_yy += gy * gy * w;
+        }
     };
     accumulate_gradient(1, 1, (1.0f - fx) * (1.0f - fy));
     accumulate_gradient(2, 1, fx * (1.0f - fy));
@@ -628,6 +638,17 @@ inline constexpr float max_minify_support = 8.0f;
         // 0 for axis-aligned gradients, 1 at 45 degrees.
         const float diagonality = 2.0f * std::min(grad_x * grad_x, grad_y * grad_y);
         stretch = clamp01(dir_len * 2.0f) * diagonality * clamp01(options.edge_strength);
+        if (options.easu_edge_coherence) {
+            // BLADE-style structure-tensor coherence: aligned gradients have one
+            // nonzero eigenvalue; conflicting directions reduce confidence. Only
+            // attenuate the existing stretch, retaining its axis-aligned safeguard.
+            const float trace = tensor_xx + tensor_yy;
+            const float delta = std::hypot(tensor_xx - tensor_yy, 2.0f * tensor_xy);
+            const float major = std::sqrt(std::max(0.0f, 0.5f * (trace + delta)));
+            const float minor = std::sqrt(std::max(0.0f, 0.5f * (trace - delta)));
+            const float coherence = major + minor > 1.0e-6f ? (major - minor) / (major + minor) : 0.0f;
+            stretch *= clamp01(coherence);
+        }
     }
     const float along_scale = 1.0f / (1.0f + stretch);
 
@@ -829,8 +850,8 @@ void apply_rcas(std::vector<Color4>& image, std::uint32_t width, std::uint32_t h
     // Largest negative lobe that keeps the sharpened result inside the local value range.
     constexpr float lobe_limit = 0.25f - 1.0f / 16.0f;
 
-    const auto rcas_one = [sharpening, alpha_aware](Color4 c, Color4 n, Color4 s, Color4 w,
-                                                    Color4 e) noexcept -> Color4 {
+    const auto rcas_one = [sharpening, alpha_aware, noise_suppression = options.rcas_noise_suppression](
+                              Color4 c, Color4 n, Color4 s, Color4 w, Color4 e) noexcept -> Color4 {
         // Per-channel peak-limited lobe: never push the center past the point where the
         // result would leave [0, 1] given the local cross minimum/maximum.
         const auto channel_lobe = [](float cn, float cs, float cw, float ce) noexcept {
@@ -845,6 +866,19 @@ void apply_rcas(std::vector<Color4>& image, std::uint32_t width, std::uint32_t h
         const float lobe_g = channel_lobe(n.g, s.g, w.g, e.g);
         const float lobe_b = channel_lobe(n.b, s.b, w.b, e.b);
         float lobe = std::max(-lobe_limit, std::min(std::max({lobe_r, lobe_g, lobe_b}), 0.0f)) * sharpening;
+        if (noise_suppression) {
+            // Adapted from AMD FSR 1 RCAS noise detection; see LICENSE.
+            // Normalize a cross high-pass by local contrast, then attenuate the lobe
+            // by up to half. A flat neighborhood has zero residual and keeps its gain.
+            const float lc = luma(c);
+            const float ln = luma(n);
+            const float ls = luma(s);
+            const float lw = luma(w);
+            const float le = luma(e);
+            const float range = std::max({lc, ln, ls, lw, le}) - std::min({lc, ln, ls, lw, le});
+            const float residual = std::abs(0.25f * (ln + ls + lw + le) - lc);
+            lobe *= 1.0f - 0.5f * clamp01(residual / std::max(range, 1.0e-6f));
+        }
         if (alpha_aware) {
             lobe *= clamp01(c.a);
         }

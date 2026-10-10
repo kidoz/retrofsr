@@ -125,6 +125,12 @@ retrofsr::Options options_from_mode(const std::string& mode) {
     if (mode == "fsr1") {
         return retrofsr::fsr1_style_options();
     }
+    if (mode == "fsr1-noise" || mode == "fsr1-coherence" || mode == "fsr1-both") {
+        auto options = retrofsr::fsr1_style_options();
+        options.rcas_noise_suppression = mode != "fsr1-coherence";
+        options.easu_edge_coherence = mode != "fsr1-noise";
+        return options;
+    }
     if (mode == "fsr1-quality") {
         return retrofsr::fsr1_style_options(retrofsr::QualityPreset::quality);
     }
@@ -163,6 +169,7 @@ int main(int argc, char** argv) {
         if (argc < 5 || argc > 6) {
             std::cerr << "usage: scale_ppm <input.ppm> <output.ppm> <width> <height> "
                          "[retro|fsr|fsr1|fsr1-quality|fsr1-balanced|fsr1-performance|fsr1-ultra"
+                         "|fsr1-noise|fsr1-coherence|fsr1-both"
                          "|nearest|bilinear|catmull|lanczos|easu]\n";
             return 2;
         }

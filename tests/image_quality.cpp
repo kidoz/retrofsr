@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -24,7 +25,6 @@ std::vector<std::byte> upscale_to(const std::vector<std::byte>& src, std::uint32
     std::vector<std::byte> dst(static_cast<std::size_t>(dw) * dh * retrofsr::bytes_per_pixel(dst_format));
     const retrofsr::ImageView src_view{src.data(), sw, sh, 0, PixelFormat::rgba8};
     const retrofsr::MutableImageView dst_view{dst.data(), dw, dh, 0, dst_format};
-    options.thread_count = 1;
     REQUIRE(retrofsr::upscale(src_view, dst_view, options) == retrofsr::Status::ok);
     return dst;
 }
@@ -495,6 +495,201 @@ TEST_CASE("generated fixtures upscale cleanly with every filter", "[fixtures]") 
                 }
             }
             REQUIRE(any_nonzero);
+        }
+    }
+}
+
+TEST_CASE("spatial research controls are opt-in and scoped to their algorithms", "[quality]") {
+    for (const auto options :
+         {Options{}, retrofsr::retro_pixel_options(), retrofsr::fsr_like_options(), retrofsr::fsr1_style_options()}) {
+        REQUIRE(options.rcas_noise_suppression == false);
+        REQUIRE(options.easu_edge_coherence == false);
+    }
+    const auto src = fixtures::make_rgba(fixtures::Pattern::noise, 12, 12);
+    Options options{};
+    options.filter = Filter::bilinear;
+    options.thread_count = 1;
+    const auto baseline = upscale_to(src, 12, 12, 24, 24, PixelFormat::rgba8, options);
+    options.rcas_noise_suppression = true;
+    options.easu_edge_coherence = true;
+    REQUIRE(upscale_to(src, 12, 12, 24, 24, PixelFormat::rgba8, options) == baseline);
+
+    // EASU's widened isotropic minification path must remain unchanged.
+    options.filter = Filter::easu;
+    options.sharpening = 0.0f;
+    const auto down = upscale_to(src, 12, 12, 6, 6, PixelFormat::rgba8, options);
+    options.easu_edge_coherence = false;
+    REQUIRE(upscale_to(src, 12, 12, 6, 6, PixelFormat::rgba8, options) == down);
+}
+
+TEST_CASE("RCAS noise suppression reduces amplification and preserves flat fields", "[quality][rcas]") {
+    auto src = fixtures::make_rgba(fixtures::Pattern::noise, 32, 32);
+    for (std::size_t p = 0; p < src.size(); p += 4) {
+        const auto v = static_cast<std::byte>(118 + static_cast<unsigned>(src[p]) % 21);
+        src[p] = src[p + 1] = src[p + 2] = v;
+    }
+    for (const auto cs : {ColorSpace::linear, ColorSpace::perceptual, ColorSpace::srgb}) {
+        CAPTURE(static_cast<int>(cs));
+        auto options = retrofsr::fsr1_style_options();
+        options.filter = Filter::nearest; // Isolate sharpening from reconstruction.
+        options.color_space = cs;
+        options.sharpening = 1.0f;
+        options.thread_count = 1;
+        const auto plain = upscale_to(src, 32, 32, 32, 32, PixelFormat::rgba8, options);
+        options.rcas_noise_suppression = true;
+        const auto suppressed = upscale_to(src, 32, 32, 32, 32, PixelFormat::rgba8, options);
+        double input_error = 0.0;
+        double plain_error = 0.0;
+        double suppressed_error = 0.0;
+        for (std::size_t p = 0; p < src.size(); p += 4) {
+            const double input = static_cast<int>(src[p]) - 128;
+            input_error += input * input;
+            const double a = static_cast<int>(plain[p]) - 128;
+            const double b = static_cast<int>(suppressed[p]) - 128;
+            plain_error += a * a;
+            suppressed_error += b * b;
+        }
+        REQUIRE(suppressed_error < plain_error);
+        REQUIRE(suppressed_error > input_error); // Sharpening still operates; not a bypass.
+
+        options.filter = Filter::easu;
+        options.easu_edge_coherence = true;
+        for (const auto value : {0, 128, 255}) {
+            const auto flat = filled_rgba(8, 8, value, value, value);
+            const auto result = upscale_to(flat, 8, 8, 13, 15, PixelFormat::rgba8, options);
+            for (std::size_t p = 0; p < result.size(); p += 4) {
+                REQUIRE(std::abs(static_cast<int>(result[p]) - value) <= 1);
+                REQUIRE(result[p + 3] == std::byte{255});
+            }
+        }
+    }
+}
+
+TEST_CASE("EASU coherence changes corners while preserving an aligned linear ramp", "[quality][easu]") {
+    auto options = retrofsr::fsr1_style_options();
+    options.sharpening = 0.0f;
+    options.thread_count = 1;
+    const auto corner = fixtures::make_motion_rgba(fixtures::MotionPattern::corner, 32, 32, 0.0f);
+    const auto legacy = upscale_to(corner, 32, 32, 48, 48, PixelFormat::rgba8, options);
+    options.easu_edge_coherence = true;
+    const auto coherent = upscale_to(corner, 32, 32, 48, 48, PixelFormat::rgba8, options);
+    REQUIRE(coherent != legacy);
+    for (std::size_t p = 0; p < coherent.size(); p += 4) {
+        REQUIRE(static_cast<int>(coherent[p]) >= 32);
+        REQUIRE(static_cast<int>(coherent[p]) <= 224);
+    }
+
+    auto ramp = filled_rgba(16, 16, 0, 0, 0);
+    for (unsigned y = 0; y < 16; ++y) {
+        for (unsigned x = 0; x < 16; ++x) {
+            const std::size_t p = (static_cast<std::size_t>(y) * 16 + x) * 4;
+            ramp[p] = ramp[p + 1] = ramp[p + 2] = static_cast<std::byte>(32 + 4 * x + 4 * y);
+        }
+    }
+    const auto adapted = upscale_to(ramp, 16, 16, 32, 32, PixelFormat::rgba8, options);
+    options.easu_edge_coherence = false;
+    const auto original = upscale_to(ramp, 16, 16, 32, 32, PixelFormat::rgba8, options);
+    // Exclude clamped borders, where the ramp's gradient is no longer uniform.
+    for (unsigned y = 4; y < 28; ++y) {
+        for (unsigned x = 4; x < 28; ++x) {
+            const auto p = (y * 32 + x) * 4;
+            REQUIRE(std::abs(static_cast<int>(adapted[p]) - static_cast<int>(original[p])) <= 1);
+        }
+    }
+}
+
+TEST_CASE("experimental spatial paths preserve alpha and threaded determinism", "[quality][alpha][threads]") {
+    for (const auto alpha : {AlphaMode::straight, AlphaMode::premultiplied}) {
+        auto src = fixtures::make_rgba(fixtures::Pattern::transparency, 24, 24);
+        if (alpha == AlphaMode::premultiplied) {
+            for (std::size_t p = 0; p < src.size(); p += 4) {
+                for (std::size_t ch = 0; ch < 3; ++ch) {
+                    src[p + ch] = static_cast<std::byte>(static_cast<unsigned>(src[p + ch]) *
+                                                         static_cast<unsigned>(src[p + 3]) / 255u);
+                }
+            }
+        }
+        for (const bool noise : {false, true}) {
+            for (const bool coherence : {false, true}) {
+                auto options = retrofsr::fsr1_style_options();
+                options.alpha = alpha;
+                options.rcas_noise_suppression = noise;
+                options.easu_edge_coherence = coherence;
+                options.sharpening = 1.0f;
+                options.thread_count = 1;
+                const auto single = upscale_to(src, 24, 24, 48, 48, PixelFormat::rgba8, options);
+                for (const auto threads : {0u, 4u}) {
+                    options.thread_count = threads;
+                    REQUIRE(upscale_to(src, 24, 24, 48, 48, PixelFormat::rgba8, options) == single);
+                }
+                for (std::size_t p = 0; p < single.size(); p += 4) {
+                    for (std::size_t ch = 0; ch < 3; ++ch) {
+                        if (alpha == AlphaMode::premultiplied) {
+                            REQUIRE(single[p + ch] <= single[p + 3]);
+                        }
+                        if (single[p + 3] == std::byte{0}) {
+                            REQUIRE(single[p + ch] == std::byte{0});
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("moving scenes stay within spatial and temporal error budgets", "[quality][motion]") {
+    // Independently integrate the analytic scene at input and output resolutions.
+    // Temporal error compares changes in reconstruction error against the moving
+    // reference, not consecutive raw frames (which would penalize legitimate motion).
+    for (const auto pattern : fixtures::motion_patterns) {
+        for (const unsigned extent : {48u, 64u, 96u}) {
+            CAPTURE(static_cast<int>(pattern), extent);
+            double spatial[2] = {};
+            double temporal[2] = {};
+            std::vector<int> previous_error[2];
+            std::size_t spatial_samples = 0;
+            std::size_t temporal_samples = 0;
+            for (unsigned frame = 0; frame < 8; ++frame) {
+                const float offset = static_cast<float>(frame) * 0.25f;
+                const auto src = fixtures::make_motion_rgba(pattern, 32, 32, offset);
+                const auto ref = fixtures::make_motion_rgba(pattern, extent, extent, offset, 32.0f / extent);
+                for (unsigned mode = 0; mode < 2; ++mode) {
+                    auto options = retrofsr::fsr1_style_options();
+                    options.alpha = AlphaMode::premultiplied;
+                    options.thread_count = 1;
+                    options.rcas_noise_suppression = mode != 0;
+                    options.easu_edge_coherence = mode != 0;
+                    const auto out = upscale_to(src, 32, 32, extent, extent, PixelFormat::rgba8, options);
+                    std::vector<int> errors;
+                    for (unsigned y = 8; y < extent - 8; ++y) {
+                        for (unsigned x = 8; x < extent - 8; ++x) {
+                            const std::size_t p = (static_cast<std::size_t>(y) * extent + x) * 4;
+                            const int error = static_cast<int>(out[p]) - static_cast<int>(ref[p]);
+                            spatial[mode] += std::abs(error);
+                            if (frame > 0) {
+                                temporal[mode] += std::abs(error - previous_error[mode][errors.size()]);
+                            }
+                            errors.push_back(error);
+                        }
+                    }
+                    if (mode == 0) {
+                        spatial_samples += errors.size();
+                        if (frame > 0) {
+                            temporal_samples += errors.size();
+                        }
+                    }
+                    previous_error[mode] = std::move(errors);
+                }
+            }
+            const double baseline_spatial = spatial[0] / spatial_samples;
+            const double experimental_spatial = spatial[1] / spatial_samples;
+            const double baseline_temporal = temporal[0] / temporal_samples;
+            const double experimental_temporal = temporal[1] / temporal_samples;
+            CAPTURE(baseline_spatial, experimental_spatial, baseline_temporal, experimental_temporal);
+            // Experiment gate: <=5% regression plus half an 8-bit code value for
+            // quantization. These are synthetic guardrails, not a perceptual verdict.
+            REQUIRE(experimental_spatial <= baseline_spatial * 1.05 + 0.5);
+            REQUIRE(experimental_temporal <= baseline_temporal * 1.05 + 0.5);
         }
     }
 }

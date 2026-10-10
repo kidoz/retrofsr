@@ -17,6 +17,9 @@ MODES = [
     "retro",
     "fsr",
     "fsr1",
+    "fsr1-noise",
+    "fsr1-coherence",
+    "fsr1-both",
     "fsr1-quality",
     "fsr1-balanced",
     "fsr1-performance",
@@ -65,6 +68,7 @@ def main():
         write_ppm(src, 16, 12)
 
         # Every mode upscales to the requested size with a correct P6 header.
+        payloads = {}
         for mode in MODES:
             out = tmp / f"out-{mode}.ppm"
             r = run(tool, src, out, 40, 30, mode)
@@ -75,8 +79,22 @@ def main():
                     magic == b"P6" and size == b"40 30" and maxval == b"255" and len(rest) == 40 * 30 * 3,
                     f"mode {mode} writes a well-formed 40x30 P6",
                 )
+                payloads[mode] = rest
+
+        # Content sanity: materially different filters must not collapse to identical
+        # output (a regression falling back to one filter would pass the checks above).
+        if "nearest" in payloads and "lanczos" in payloads:
+            check(payloads["nearest"] != payloads["lanczos"], "nearest and lanczos produce different pixels")
+        if "fsr1-quality" in payloads and "fsr1-ultra" in payloads:
+            check(
+                payloads["fsr1-quality"] != payloads["fsr1-ultra"],
+                "fsr1-quality and fsr1-ultra produce different pixels",
+            )
 
         # Downscaling works too (anti-aliased since 0.5).
+        for mode in ("fsr1-noise", "fsr1-coherence", "fsr1-both"):
+            check(payloads.get(mode) != payloads.get("fsr1"), f"{mode} exercises an experimental path")
+
         out = tmp / "down.ppm"
         r = run(tool, src, out, 8, 6, "easu")
         check(r.returncode == 0, "downscale exits 0")

@@ -94,7 +94,7 @@ The example reads and writes binary PPM (`P6`) images:
 ./build/scale_ppm input.ppm output.ppm 1280 960 fsr
 ```
 
-Modes: `retro`, `fsr`, `fsr1`, `fsr1-quality`, `fsr1-balanced`, `fsr1-performance`, `fsr1-ultra`, `nearest`, `bilinear`, `catmull`, `lanczos`, `easu`.
+Modes: `retro`, `fsr`, `fsr1`, `fsr1-noise`, `fsr1-coherence`, `fsr1-both`, `fsr1-quality`, `fsr1-balanced`, `fsr1-performance`, `fsr1-ultra`, `nearest`, `bilinear`, `catmull`, `lanczos`, `easu`.
 
 ## Choosing a mode
 
@@ -120,6 +120,30 @@ Modes: `retro`, `fsr`, `fsr1`, `fsr1-quality`, `fsr1-balanced`, `fsr1-performanc
 | `QualityPreset::ultra_performance` | 3.0x | 640x360 |
 
 Use `retrofsr::quality_preset_source_size(preset, out_w, out_h)` to compute the source size, and `fsr1_style_options(preset)` for matching sharpening strength.
+
+## Experimental spatial controls (0.6)
+
+Both controls are opt-in; existing presets keep their previous output:
+
+```cpp
+auto options = retrofsr::fsr1_style_options();
+options.rcas_noise_suppression = true;
+options.easu_edge_coherence = true;
+```
+
+`rcas_noise_suppression` reduces RCAS sharpening of locally noise-like detail.
+It limits noise amplification rather than removing noise, and can also reduce
+sharpening of intentional dithering or fine textures. It only affects
+`Sharpen::robust_contrast_adaptive` when sharpening is enabled.
+
+`easu_edge_coherence` uses agreement between local gradients to attenuate EASU
+kernel stretching at corners and conflicting texture directions. It only affects
+EASU upscaling; the minification fallback is unchanged. It is an experiment,
+not a claim of improved quality on every image. Compare moving content as well
+as still frames before selecting it for a frontend.
+
+Version 0.6 changes the `Options` layout and shared-library ABI; rebuild callers.
+The shared-library ABI version is 0.6. No runtime dependencies were added.
 
 ## Quality and performance tooling
 
