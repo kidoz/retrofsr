@@ -20,6 +20,8 @@ It provides three practical presets:
 - Quality preset helpers for common FSR scale factors: Quality 1.5x, Balanced 1.7x, Performance 2.0x, Ultra Performance 3.0x.
 - Optional straight/premultiplied alpha handling with alpha-aware sharpening that avoids halos around transparency.
 - Optional deterministic ordered dithering (`Options::dither`) for `rgb565`, `bgr565`, `gray8`, and 8-bit outputs; off by default.
+- Anti-aliased downscaling via per-axis kernel widening, including mixed-axis resizes (see [Downscaling](#downscaling)).
+- Opt-in experimental controls: RCAS noise suppression and EASU edge coherence (see [Experimental spatial controls](#experimental-spatial-controls-06)).
 - When sharpening is disabled, upscaling streams directly into the destination without the intermediate float image.
 
 ## Build
@@ -161,6 +163,7 @@ The shared-library ABI version is 0.6. No runtime dependencies were added.
 With [`just`](https://github.com/casey/just) installed:
 
 - `just quality` — Ruff lint/format checks, strict mypy, and all Meson regression tests.
+- `just lint` — the same Python and C++ static checks (ruff, mypy, clang-format, clang-tidy) without running tests.
 - `just python-check` — Python checks only; `just format` formats both C++ and Python.
 - `just check` — Python checks, C++ formatting/clang-tidy, and the complete test suite.
 - `just golden` — regenerate golden expectations after an intentional image-quality change (review the diff before committing).
