@@ -40,14 +40,21 @@ compare a b *args: build
 # Uses a dedicated build dir so -Dbenchmarks=true never sticks to the default one
 # (a stale option there breaks reconfigure against trees that lack the option).
 bench_dir := env_var_or_default("BENCH_DIR", "buildBench")
-bench:
+bench-setup:
     @if [ -d "{{bench_dir}}" ]; then \
         meson setup "{{bench_dir}}" --reconfigure -Dbenchmarks=true > /dev/null; \
     else \
         meson setup "{{bench_dir}}" -Dbenchmarks=true > /dev/null; \
     fi
+
+bench-build: bench-setup
     meson compile -C "{{bench_dir}}" retrofsr_bench
-    ./"{{bench_dir}}"/retrofsr_bench
+
+# Repeated wall-time measurements; JSON retains individual repetitions.
+# Pass --benchmark_filter=... for a subset and --benchmark_out=... to keep a baseline.
+[positional-arguments]
+bench *args: bench-build
+    ./"{{bench_dir}}"/retrofsr_bench --benchmark_repetitions=5 --benchmark_min_time=0.2s --benchmark_enable_random_interleaving=true --benchmark_display_aggregates_only=true --benchmark_out="{{bench_dir}}/latest.json" --benchmark_out_format=json "$@"
 
 format:
     clang-format -i {{format_files}}

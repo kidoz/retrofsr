@@ -107,10 +107,19 @@ if get_option('tools')
 endif
 
 if get_option('benchmarks')
-  executable(
+  # Pin the harness and its comparison script to the same WrapDB source.
+  benchmark_project = subproject('google-benchmark', default_options: ['tests=disabled', 'default_library=static'])
+  benchmark_dep = benchmark_project.get_variable('google_benchmark_dep')
+  benchmark_exe = executable(
     'retrofsr_bench',
     'benchmarks/bench.cpp',
-    dependencies: retrofsr_dep,
+    dependencies: [retrofsr_dep, benchmark_dep],
+    cpp_args: [
+      '-DRETROFSR_BENCH_VERSION="' + meson.project_version() + '"',
+      '-DRETROFSR_BENCH_COMPILER="' + cpp_compiler.get_id() + ' ' + cpp_compiler.version() + '"',
+      '-DRETROFSR_BENCH_BUILD_TYPE="' + get_option('buildtype') + '"',
+      '-DRETROFSR_BENCH_SIMD="' + get_option('simd').to_string() + '"',
+    ],
     install: false,
   )
 endif

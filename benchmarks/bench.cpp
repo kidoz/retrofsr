@@ -1,20 +1,13 @@
-// Throughput/latency benchmark for common emulator frame sizes.
-//
-//   just bench            (configures -Dbenchmarks=true, builds, runs)
-//   ./buildDir/retrofsr_bench [thread_count]
-//
-// Each case upscales the source 2x per axis with default options (sharpening 0.20)
-// for the given filter. Reported throughput counts destination pixels.
-
+// Repeated whole-frame timings. Google Benchmark's real time includes the scaler's
+// internal workers; its benchmark runner itself remains single-threaded.
 #include <retrofsr/retrofsr.hpp>
 
-#include <charconv>
-#include <chrono>
+#include <benchmark/benchmark.h>
+
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
-#include <limits>
-#include <string_view>
+#include <string>
 #include <vector>
 
 namespace {
@@ -24,8 +17,8 @@ struct FrameSize {
     std::uint32_t height;
 };
 
-constexpr FrameSize frame_sizes[] = {
-    {256, 240}, {320, 240}, {640, 480}, {1280, 720}, {1920, 1080},
+constexpr std::array frame_sizes{
+    FrameSize{256, 240}, FrameSize{320, 240}, FrameSize{640, 480}, FrameSize{1280, 720}, FrameSize{1920, 1080},
 };
 
 struct FilterCase {
@@ -33,23 +26,23 @@ struct FilterCase {
     const char* name;
 };
 
-constexpr FilterCase filter_cases[] = {
-    {retrofsr::Filter::nearest, "nearest"},
-    {retrofsr::Filter::bilinear, "bilinear"},
-    {retrofsr::Filter::sharp_bilinear, "sharp_bilinear"},
-    {retrofsr::Filter::catmull_rom, "catmull_rom"},
-    {retrofsr::Filter::lanczos3, "lanczos3"},
-    {retrofsr::Filter::edge_adaptive_lanczos, "edge_adaptive"},
-    {retrofsr::Filter::easu, "easu"},
+constexpr std::array filter_cases{
+    FilterCase{retrofsr::Filter::nearest, "nearest"},
+    FilterCase{retrofsr::Filter::bilinear, "bilinear"},
+    FilterCase{retrofsr::Filter::sharp_bilinear, "sharp_bilinear"},
+    FilterCase{retrofsr::Filter::catmull_rom, "catmull_rom"},
+    FilterCase{retrofsr::Filter::lanczos3, "lanczos3"},
+    FilterCase{retrofsr::Filter::edge_adaptive_lanczos, "edge_adaptive"},
+    FilterCase{retrofsr::Filter::easu, "easu"},
 };
 
-std::vector<std::byte> make_frame(std::uint32_t width, std::uint32_t height) {
-    std::vector<std::byte> frame(static_cast<std::size_t>(width) * height * 4);
-    for (std::uint32_t y = 0; y < height; ++y) {
-        for (std::uint32_t x = 0; x < width; ++x) {
-            const std::size_t i = (static_cast<std::size_t>(y) * width + x) * 4;
-            frame[i + 0] = static_cast<std::byte>(x & 0xff);
-            frame[i + 1] = static_cast<std::byte>(y & 0xff);
+std::vector<std::byte> make_frame(FrameSize size) {
+    std::vector<std::byte> frame(static_cast<std::size_t>(size.width) * size.height * 4);
+    for (std::uint32_t y = 0; y < size.height; ++y) {
+        for (std::uint32_t x = 0; x < size.width; ++x) {
+            const std::size_t i = (static_cast<std::size_t>(y) * size.width + x) * 4;
+            frame[i] = static_cast<std::byte>(x & 0xffu);
+            frame[i + 1] = static_cast<std::byte>(y & 0xffu);
             frame[i + 2] = static_cast<std::byte>(((x ^ y) & 8u) != 0 ? 220 : 40);
             frame[i + 3] = static_cast<std::byte>(255);
         }
@@ -57,76 +50,77 @@ std::vector<std::byte> make_frame(std::uint32_t width, std::uint32_t height) {
     return frame;
 }
 
-[[nodiscard]] double run_once(const std::vector<std::byte>& src, FrameSize s, std::vector<std::byte>& dst,
-                              retrofsr::Options options) {
-    const retrofsr::ImageView src_view{src.data(), s.width, s.height, 0, retrofsr::PixelFormat::rgba8};
-    const retrofsr::MutableImageView dst_view{dst.data(), s.width * 2, s.height * 2, 0, retrofsr::PixelFormat::rgba8};
-    const auto start = std::chrono::steady_clock::now();
-    const auto status = retrofsr::upscale(src_view, dst_view, options);
-    const auto stop = std::chrono::steady_clock::now();
-    if (status != retrofsr::Status::ok) {
-        std::fprintf(stderr, "upscale failed: %s\n", retrofsr::status_message(status));
-        return -1.0;
+void run_case(benchmark::State& state, FrameSize size, retrofsr::Options options) {
+    options.thread_count = static_cast<std::uint32_t>(state.range(0));
+    const auto source = make_frame(size);
+    std::vector<std::byte> destination(static_cast<std::size_t>(size.width) * size.height * 16);
+    const retrofsr::ImageView input{source.data(), size.width, size.height, 0, retrofsr::PixelFormat::rgba8};
+    const retrofsr::MutableImageView output{destination.data(), size.width * 2, size.height * 2, 0,
+                                            retrofsr::PixelFormat::rgba8};
+    // Source/destination allocation and one warmup are outside the timed loop.
+    const auto warmup = retrofsr::upscale(input, output, options);
+    if (warmup != retrofsr::Status::ok) {
+        state.SkipWithError(retrofsr::status_message(warmup));
+        return;
     }
-    return std::chrono::duration<double, std::milli>(stop - start).count();
+    for ([[maybe_unused]] auto iteration : state) {
+        const auto result = retrofsr::upscale(input, output, options);
+        if (result != retrofsr::Status::ok) {
+            state.SkipWithError(retrofsr::status_message(result));
+            break;
+        }
+        benchmark::DoNotOptimize(destination.data());
+        benchmark::ClobberMemory();
+    }
+    state.counters["Mpix/s"] = benchmark::Counter(static_cast<double>(size.width) * size.height * 4 / 1.0e6,
+                                                  benchmark::Counter::kIsIterationInvariantRate);
+}
+
+void register_mode(const std::string& name, retrofsr::Options options) {
+    for (const auto size : frame_sizes) {
+        const auto case_name = name + "/" + std::to_string(size.width) + "x" + std::to_string(size.height);
+        benchmark::RegisterBenchmark(case_name.c_str(),
+                                     [size, options](benchmark::State& state) { run_case(state, size, options); })
+            ->ArgName("workers")
+            ->Arg(0)
+            ->Arg(1)
+            ->Arg(4)
+            ->UseRealTime()
+            ->Unit(benchmark::kMillisecond);
+    }
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    std::uint32_t threads = 0;
-    if (argc > 1) {
-        const std::string_view arg = argv[1];
-        std::uint32_t parsed = 0;
-        const auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), parsed);
-        if (ec != std::errc{} || ptr != arg.data() + arg.size()) {
-            std::fprintf(stderr, "usage: retrofsr_bench [thread_count]\n");
-            return 2;
-        }
-        threads = parsed;
+    // Preserve the old seven-filter matrix: default sRGB + CAS sharpening 0.20.
+    for (const auto filter_case : filter_cases) {
+        retrofsr::Options options{};
+        options.filter = filter_case.filter;
+        register_mode(std::string("legacy/") + filter_case.name, options);
     }
-
-    std::printf("retrofsr benchmark: 2x upscale per axis, rgba8, default options (sharpening 0.20)\n");
-    std::printf("threads: %s\n\n", threads == 0 ? "auto" : argv[1]);
-    std::printf("%-15s %-22s %12s %12s %12s\n", "filter", "src -> dst", "avg ms", "min ms", "Mpix/s");
-
-    for (const auto s : frame_sizes) {
-        const auto src = make_frame(s.width, s.height);
-        std::vector<std::byte> dst(static_cast<std::size_t>(s.width) * 2 * s.height * 2 * 4);
-        const double dst_mpix = static_cast<double>(s.width) * 2.0 * static_cast<double>(s.height) * 2.0 / 1.0e6;
-
-        for (const auto filter_case : filter_cases) {
-            retrofsr::Options options{};
-            options.filter = filter_case.filter;
-            options.thread_count = threads;
-
-            const double warmup_ms = run_once(src, s, dst, options);
-            if (warmup_ms < 0.0) {
-                return 1;
-            }
-            // Aim for roughly half a second per case; the cap keeps pathological
-            // estimates bounded while still giving fast cases enough samples.
-            int iterations = warmup_ms > 0.0 ? static_cast<int>(500.0 / warmup_ms) : 200;
-            iterations = iterations < 3 ? 3 : (iterations > 200 ? 200 : iterations);
-
-            double total_ms = 0.0;
-            double min_ms = std::numeric_limits<double>::infinity();
-            for (int i = 0; i < iterations; ++i) {
-                const double ms = run_once(src, s, dst, options);
-                if (ms < 0.0) {
-                    return 1;
-                }
-                total_ms += ms;
-                min_ms = ms < min_ms ? ms : min_ms;
-            }
-            const double avg_ms = total_ms / iterations;
-
-            char size_text[32];
-            std::snprintf(size_text, sizeof size_text, "%ux%u -> %ux%u", s.width, s.height, s.width * 2, s.height * 2);
-            std::printf("%-15s %-22s %12.3f %12.3f %12.1f\n", filter_case.name, size_text, avg_ms, min_ms,
-                        dst_mpix / (avg_ms / 1000.0));
-        }
-        std::printf("\n");
+    for (unsigned flags = 0; flags < 4; ++flags) {
+        auto options = retrofsr::fsr1_style_options();
+        options.rcas_noise_suppression = (flags & 1u) != 0;
+        options.easu_edge_coherence = (flags & 2u) != 0;
+        constexpr std::array names{"fsr1/baseline", "fsr1/noise", "fsr1/coherence", "fsr1/both"};
+        register_mode(names[flags], options);
     }
-    return 0;
+    auto nearest = retrofsr::fsr_like_options();
+    nearest.filter = retrofsr::Filter::nearest;
+    nearest.sharpening = 0;
+    register_mode("pixel_art/nearest", nearest);
+
+    benchmark::Initialize(&argc, argv);
+    if (benchmark::ReportUnrecognizedArguments(argc, argv)) {
+        return 2;
+    }
+    benchmark::AddCustomContext("retrofsr_version", RETROFSR_BENCH_VERSION);
+    benchmark::AddCustomContext("compiler", RETROFSR_BENCH_COMPILER);
+    benchmark::AddCustomContext("build_type", RETROFSR_BENCH_BUILD_TYPE);
+    benchmark::AddCustomContext("simd", RETROFSR_BENCH_SIMD);
+    benchmark::AddCustomContext("workload", "rgb-gradient-xor-v1; rgba8; 2x per axis; workers=0 means auto");
+    benchmark::AddCustomContext("timing", "wall time; includes internal allocation and worker startup; excludes IO");
+    benchmark::RunSpecifiedBenchmarks();
+    benchmark::Shutdown();
 }
