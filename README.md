@@ -36,21 +36,21 @@ do not require uv. Python checks cover `tools/` and `tests/tools/`; local agent
 framework scripts and downloaded dependencies are outside that scope.
 
 ```sh
-meson setup build
-meson compile -C build
-meson test -C build
+meson setup buildDir
+meson compile -C buildDir
+meson test -C buildDir
 ```
 
 Install:
 
 ```sh
-meson install -C build
+meson install -C buildDir
 ```
 
 Disable examples/tests:
 
 ```sh
-meson setup build -Dexamples=false -Dtests=false
+meson setup buildDir -Dexamples=false -Dtests=false
 ```
 
 Other options: `-Dtools=false` skips the `retrofsr_compare` metrics tool, `-Dbenchmarks=true` builds `retrofsr_bench`, and `-Dsimd=true` enables vectorization-friendly math flags (`-fno-math-errno`, `-fno-trapping-math`); the default build is the scalar fallback of the same kernels.
@@ -101,8 +101,8 @@ void scale_frame(const std::uint8_t* src_rgba,
 The example reads and writes binary PPM (`P6`) images:
 
 ```sh
-./build/scale_ppm input.ppm output.ppm 1280 960 retro
-./build/scale_ppm input.ppm output.ppm 1280 960 fsr
+./buildDir/scale_ppm input.ppm output.ppm 1280 960 retro
+./buildDir/scale_ppm input.ppm output.ppm 1280 960 fsr
 ```
 
 Modes: `retro`, `fsr`, `fsr1`, `fsr1-noise`, `fsr1-coherence`, `fsr1-both`, `fsr1-quality`, `fsr1-balanced`, `fsr1-performance`, `fsr1-ultra`, `nearest`, `bilinear`, `catmull`, `lanczos`, `easu`.
