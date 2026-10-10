@@ -128,6 +128,11 @@ def main() -> int:
         write_ppm(bad, 8, 8, magic=b"P5")
         check(run(tool, bad, tmp / "x.ppm", 16, 16).returncode == 1, "non-P6 input is rejected")
 
+        # An oversize input header must be rejected before any allocation.
+        huge = tmp / "huge.ppm"
+        huge.write_bytes(b"P6\n4294967295 1\n255\n")
+        r = run(tool, huge, tmp / "x.ppm", 16, 16)
+        check(r.returncode == 1 and "too large" in r.stderr, "oversize input header is rejected")
 
     if FAILURES:
         print(f"{len(FAILURES)} check(s) failed")

@@ -363,6 +363,14 @@ inline constexpr float max_minify_support = 8.0f;
     return std::clamp(minify, 1.0f, max_minify_support / radius);
 }
 
+// Float coordinates at dimensions near INT32_MAX can round up to exactly 2^31, where a
+// float-to-int32 conversion is undefined. Clamping to the largest float strictly inside
+// the int32 range (float spacing at 2^31 is 128) is behavior-preserving: load_source
+// clamps texel indices to the image, and no size below ~2^31 - 256 is affected.
+[[nodiscard]] constexpr std::int32_t source_coord_to_int32(float v) noexcept {
+    return static_cast<std::int32_t>(std::clamp(v, -2147483520.0f, 2147483520.0f));
+}
+
 [[nodiscard]] constexpr float smooth_fraction_for_sharp_bilinear(float fraction, float upscale_factor) noexcept {
     if (upscale_factor <= 1.0f) {
         return fraction;
@@ -373,15 +381,15 @@ inline constexpr float max_minify_support = 8.0f;
 }
 
 [[nodiscard]] Color4 sample_nearest(ImageView image, float sx, float sy, const Options& options) noexcept {
-    const auto ix = static_cast<std::int32_t>(std::floor(sx + 0.5f));
-    const auto iy = static_cast<std::int32_t>(std::floor(sy + 0.5f));
+    const auto ix = source_coord_to_int32(std::floor(sx + 0.5f));
+    const auto iy = source_coord_to_int32(std::floor(sy + 0.5f));
     return load_source(image, ix, iy, options);
 }
 
 [[nodiscard]] Color4 sample_bilinear(ImageView image, float sx, float sy, const Options& options,
                                      float fraction_scale_x = 1.0f, float fraction_scale_y = 1.0f) noexcept {
-    const auto ix = static_cast<std::int32_t>(std::floor(sx));
-    const auto iy = static_cast<std::int32_t>(std::floor(sy));
+    const auto ix = source_coord_to_int32(std::floor(sx));
+    const auto iy = source_coord_to_int32(std::floor(sy));
     float fx = sx - static_cast<float>(ix);
     float fy = sy - static_cast<float>(iy);
 
@@ -405,10 +413,10 @@ inline constexpr float max_minify_support = 8.0f;
     const float support_x = 2.0f * minify_x;
     const float support_y = 2.0f * minify_y;
 
-    const auto min_x = static_cast<std::int32_t>(std::ceil(sx - support_x));
-    const auto max_x = static_cast<std::int32_t>(std::floor(sx + support_x));
-    const auto min_y = static_cast<std::int32_t>(std::ceil(sy - support_y));
-    const auto max_y = static_cast<std::int32_t>(std::floor(sy + support_y));
+    const auto min_x = source_coord_to_int32(std::ceil(sx - support_x));
+    const auto max_x = source_coord_to_int32(std::floor(sx + support_x));
+    const auto min_y = source_coord_to_int32(std::ceil(sy - support_y));
+    const auto max_y = source_coord_to_int32(std::floor(sy + support_y));
 
     Color4 sum{};
     float weight_sum = 0.0f;
@@ -440,10 +448,10 @@ inline constexpr float max_minify_support = 8.0f;
     minify_x = clamp_minify(minify_x, 1.0f);
     minify_y = clamp_minify(minify_y, 1.0f);
 
-    const auto min_x = static_cast<std::int32_t>(std::ceil(sx - minify_x));
-    const auto max_x = static_cast<std::int32_t>(std::floor(sx + minify_x));
-    const auto min_y = static_cast<std::int32_t>(std::ceil(sy - minify_y));
-    const auto max_y = static_cast<std::int32_t>(std::floor(sy + minify_y));
+    const auto min_x = source_coord_to_int32(std::ceil(sx - minify_x));
+    const auto max_x = source_coord_to_int32(std::floor(sx + minify_x));
+    const auto min_y = source_coord_to_int32(std::ceil(sy - minify_y));
+    const auto max_y = source_coord_to_int32(std::floor(sy + minify_y));
 
     Color4 sum{};
     float weight_sum = 0.0f;
@@ -480,10 +488,10 @@ inline constexpr float max_minify_support = 8.0f;
     const float support_x = radius_x * minify_x;
     const float support_y = radius_y * minify_y;
 
-    const auto min_x = static_cast<std::int32_t>(std::ceil(sx - support_x));
-    const auto max_x = static_cast<std::int32_t>(std::floor(sx + support_x));
-    const auto min_y = static_cast<std::int32_t>(std::ceil(sy - support_y));
-    const auto max_y = static_cast<std::int32_t>(std::floor(sy + support_y));
+    const auto min_x = source_coord_to_int32(std::ceil(sx - support_x));
+    const auto max_x = source_coord_to_int32(std::floor(sx + support_x));
+    const auto min_y = source_coord_to_int32(std::ceil(sy - support_y));
+    const auto max_y = source_coord_to_int32(std::floor(sy + support_y));
 
     Color4 sum{};
     float weight_sum = 0.0f;
@@ -529,10 +537,10 @@ inline constexpr float max_minify_support = 8.0f;
     const float support_x = 2.0f * minify_x;
     const float support_y = 2.0f * minify_y;
 
-    const auto min_x = static_cast<std::int32_t>(std::ceil(sx - support_x));
-    const auto max_x = static_cast<std::int32_t>(std::floor(sx + support_x));
-    const auto min_y = static_cast<std::int32_t>(std::ceil(sy - support_y));
-    const auto max_y = static_cast<std::int32_t>(std::floor(sy + support_y));
+    const auto min_x = source_coord_to_int32(std::ceil(sx - support_x));
+    const auto max_x = source_coord_to_int32(std::floor(sx + support_x));
+    const auto min_y = source_coord_to_int32(std::ceil(sy - support_y));
+    const auto max_y = source_coord_to_int32(std::floor(sy + support_y));
 
     Color4 sum{};
     float weight_sum = 0.0f;
@@ -563,8 +571,8 @@ inline constexpr float max_minify_support = 8.0f;
 
 [[nodiscard]] Color4 sample_edge_adaptive_lanczos(ImageView image, float sx, float sy, const Options& options,
                                                   float minify_x = 1.0f, float minify_y = 1.0f) noexcept {
-    const auto ix = static_cast<std::int32_t>(std::floor(sx + 0.5f));
-    const auto iy = static_cast<std::int32_t>(std::floor(sy + 0.5f));
+    const auto ix = source_coord_to_int32(std::floor(sx + 0.5f));
+    const auto iy = source_coord_to_int32(std::floor(sy + 0.5f));
 
     const float left = luma(load_source(image, ix - 1, iy, options));
     const float right = luma(load_source(image, ix + 1, iy, options));
@@ -584,8 +592,8 @@ inline constexpr float max_minify_support = 8.0f;
 }
 
 [[nodiscard]] Color4 sample_easu(ImageView image, float sx, float sy, const Options& options) noexcept {
-    const auto base_x = static_cast<std::int32_t>(std::floor(sx));
-    const auto base_y = static_cast<std::int32_t>(std::floor(sy));
+    const auto base_x = source_coord_to_int32(std::floor(sx));
+    const auto base_y = source_coord_to_int32(std::floor(sy));
     const float fx = sx - static_cast<float>(base_x);
     const float fy = sy - static_cast<float>(base_y);
 

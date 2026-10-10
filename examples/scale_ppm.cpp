@@ -81,6 +81,12 @@ RgbaImage read_ppm(const std::string& path) {
     if (width == 0 || height == 0 || max_value != 255) {
         throw std::runtime_error("PPM must have non-zero size and max value 255");
     }
+    // Same dimension cap as the CLI arguments (the library's documented limit): reject
+    // before allocating, so an absurd header fails fast instead of thrashing the allocator.
+    constexpr auto max_dimension = static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max());
+    if (width > max_dimension || height > max_dimension) {
+        throw std::runtime_error("image dimensions are too large");
+    }
     in.get(); // consume one whitespace byte after max value
 
     std::vector<std::byte> rgb(checked_buffer_bytes(width, height, 3));
