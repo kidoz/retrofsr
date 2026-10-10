@@ -1,7 +1,7 @@
 project(
   'retrofsr',
   'cpp',
-  version: '0.5.0',
+  version: '0.6.0',
   license: 'MIT',
   default_options: [
     'cpp_std=c++23',
@@ -28,10 +28,11 @@ retrofsr_lib = library(
   'src/retrofsr.cpp',
   include_directories: retrofsr_inc,
   cpp_args: retrofsr_args,
-  # Pre-1.0 ABI is unstable (Options grows fields across minors); track soversion to
-  # the minor so stale binaries fail to load instead of misreading Options.
+  # Pre-1.0 ABI is unstable (Options may grow fields); bump soversion whenever the
+  # public ABI actually breaks so stale binaries fail to load instead of misreading
+  # Options. 0.6 adds opt-in RCAS noise suppression and EASU coherence controls.
   version: meson.project_version(),
-  soversion: '0.4',
+  soversion: '0.6',
   install: true,
 )
 
