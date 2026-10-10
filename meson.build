@@ -41,6 +41,7 @@ retrofsr_dep = declare_dependency(
 )
 
 install_headers('include/retrofsr/retrofsr.hpp', subdir: 'retrofsr')
+install_data('LICENSE', install_dir: get_option('datadir') / 'doc' / 'retrofsr')
 
 pkg = import('pkgconfig')
 pkg.generate(
